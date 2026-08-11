@@ -1,10 +1,11 @@
 # Plane Workflow MCP
 
-Plane Workflow MCP is a configurable Model Context Protocol (MCP) server for
-working with [Plane](https://plane.so/) work items from coding clients. It
-provides guided setup, local workflow profiles, read-only reporting, and
-guarded write operations. The repository also contains an optional Mattermost
-direct-message bot that uses the same workflow rules.
+Plane Workflow MCP is an open-source [Model Context Protocol
+(MCP)](https://modelcontextprotocol.io/) server for [Plane](https://plane.so/)
+project management. It lets Codex and other AI coding clients create, update,
+audit, and export Plane work items through configurable workflows, read-only
+reporting, and guarded write operations. The repository also contains an
+optional Mattermost direct-message bot that uses the same workflow rules.
 
 Licensed under the [MIT License](LICENSE).
 
