@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "default": {
+    "title_template": [
+      "{context}",
+      "{module}",
+      "{surface}",
+      "{outcome}"
+    ],
+    "default_priority": "medium",
+    "type_labels": {
+      "bug": "Bug",
+      "improvement": "Improvement"
+    },
+    "type_label_colors": {
+      "bug": "#E5484D",
+      "improvement": "#3B82F6"
+    }
+  },
+  "profiles": []
+}

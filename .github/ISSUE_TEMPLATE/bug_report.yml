@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a reproducible problem in a public release.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include credentials, private URLs,
+        workspace or project identifiers, generated reports, or customer data.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Package or plugin version where you observed the problem.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Core MCP server
+        - Codex plugin
+        - Mattermost bot
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List the smallest sanitized steps that reproduce the problem.
+      placeholder: |
+        1. Run ...
+        2. Configure ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized logs
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, private endpoints, project identifiers, and personal data.
+          required: true

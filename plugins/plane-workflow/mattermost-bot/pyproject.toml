@@ -1,0 +1,17 @@
+[project]
+name = "plane-workflow-mattermost-bot"
+version = "0.2.0"
+description = "Optional local Mattermost companion for Plane Workflow"
+requires-python = ">=3.11"
+dependencies = [
+  "fastmcp>=3.2.0,<4",
+  "plane-workflow-mcp",
+  "requests>=2.31,<3",
+  "websocket-client>=1.8,<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+plane-workflow-mcp = { path = "..", editable = true }

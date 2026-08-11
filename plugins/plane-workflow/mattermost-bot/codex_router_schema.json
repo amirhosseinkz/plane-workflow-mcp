@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action", "arguments_json", "message"],
+  "properties": {
+    "action": {
+      "type": ["string", "null"]
+    },
+    "arguments_json": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    }
+  }
+}

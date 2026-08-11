@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "plane-workflow": {
+      "command": "uv",
+      "cwd": ".",
+      "args": [
+        "run",
+        "plane-workflow",
+        "mcp"
+      ]
+    }
+  }
+}

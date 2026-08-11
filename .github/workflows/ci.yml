@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: Public-release hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check for tracked artifacts and fixed deployment URLs
+        run: python scripts/check_release_hygiene.py
+
+  test:
+    name: Test ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: core MCP
+            directory: plugins/plane-workflow
+          - component: Mattermost bot
+            directory: plugins/plane-workflow/mattermost-bot
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            plugins/plane-workflow/uv.lock
+            plugins/plane-workflow/mattermost-bot/uv.lock
+
+      - name: Verify lockfile
+        working-directory: ${{ matrix.directory }}
+        run: uv lock --check
+
+      - name: Run unit tests
+        working-directory: ${{ matrix.directory }}
+        run: uv run --locked python -m unittest discover -s tests -v
+
+  build:
+    name: Build core package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: plugins/plane-workflow/uv.lock
+
+      - name: Build source and wheel distributions
+        working-directory: plugins/plane-workflow
+        run: uv build --out-dir "${RUNNER_TEMP}/plane-workflow-dist"

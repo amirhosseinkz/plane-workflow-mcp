@@ -1,0 +1,20 @@
+{
+  "name": "plane-workflow-community",
+  "interface": {
+    "displayName": "Plane Workflow Community"
+  },
+  "plugins": [
+    {
+      "name": "plane-workflow",
+      "source": {
+        "source": "local",
+        "path": "./plugins/plane-workflow"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

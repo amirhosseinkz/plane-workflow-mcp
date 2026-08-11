@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a focused, public-facing improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the public problem to solve. Do not include private customer,
+        workspace, project, or credential information.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user need or limitation does this address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior and any alternatives considered.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sanitized examples, mockups, or links if useful.
