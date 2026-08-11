@@ -32,6 +32,7 @@ ALLOWED_HOSTS = {
     "example.com",
     "github.com",
     "json-schema.org",
+    "modelcontextprotocol.io",
     "opencode.ai",
     "plane.so",
     "docs.astral.sh",
