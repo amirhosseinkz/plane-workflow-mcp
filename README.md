@@ -59,6 +59,30 @@ plane-workflow mcp
 profiles can be stored outside the repository with `PLANE_WORKFLOW_CONFIG`.
 Never commit API keys, private profile files, or generated reports.
 
+## Workspaces and projects
+
+Configure each Plane workspace with a unique profile, then select the active
+workspace and project before creating or updating work items:
+
+```bash
+plane-workflow setup --profile client-a
+plane-workflow workspace list
+plane-workflow workspace activate client-a
+plane-workflow project list
+plane-workflow project activate <project-id>
+plane-workflow status
+```
+
+Each workspace profile retains its own active project. MCP clients can use
+`get_active_plane_context`, `list_configured_plane_workspaces`,
+`activate_plane_workspace`, `list_plane_projects`, and
+`activate_plane_project` for the same flow.
+
+When an active project is selected, work-item mutation tools use it by default
+and reject a conflicting `project_id`. They also confirm that a referenced work
+item belongs to the selected project, preventing accidental changes in the
+wrong project.
+
 ## Install the Codex plugin
 
 The repository includes a Codex plugin marketplace entry:
