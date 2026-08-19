@@ -48,3 +48,42 @@ class ConfigurationTests(unittest.TestCase):
             self.assertTrue(configuration.remove_stored_plane_settings())
             self.assertIsNone(configuration.load_stored_plane_settings())
             self.assertEqual(keyring.values, {})
+
+    def test_workspace_profiles_keep_independent_active_projects(self) -> None:
+        keyring = _Keyring()
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"PLANE_WORKFLOW_HOME": directory}, clear=False), patch.object(configuration, "keyring", keyring):
+            configuration.save_stored_plane_settings(
+                base_url="https://first.example.test",
+                workspace="first-workspace",
+                api_key="first-secret",
+                profile="first",
+            )
+            configuration.set_stored_active_project(
+                profile="first",
+                project_id="first-project-id",
+                identifier="FIRST",
+                name="First project",
+            )
+            configuration.save_stored_plane_settings(
+                base_url="https://second.example.test",
+                workspace="second-workspace",
+                api_key="second-secret",
+                profile="second",
+            )
+            configuration.set_stored_active_project(
+                profile="second",
+                project_id="second-project-id",
+                identifier="SECOND",
+                name="Second project",
+            )
+            configuration.activate_stored_plane_profile("first")
+
+            active = configuration.load_stored_plane_settings()
+            profiles = configuration.list_stored_plane_profiles()
+
+            self.assertEqual(active.profile, "first")
+            self.assertEqual(active.active_project, configuration.StoredPlaneProject("first-project-id", "FIRST", "First project"))
+            self.assertEqual(
+                [(profile.profile, profile.active, profile.active_project.id if profile.active_project else None) for profile in profiles],
+                [("first", True, "first-project-id"), ("second", False, "second-project-id")],
+            )

@@ -10,9 +10,10 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 ## Start Safely
 
 1. For a first-time connection, call `get_plane_workflow_setup_status`. If it returns `needs_setup`, tell the user to run `plane-workflow setup`; do not ask them to paste an API key into the chat or a client config file.
-2. For an existing connection or unexpected failure, call `diagnose_plane_connection` with the project ID. Do not guess which Plane capabilities are enabled.
-3. Call `get_project_workflow_context` before writing. Use `get_workflow_options` when the request needs a state, cycle, assignee, estimate, or date.
-4. Use `get_project_workflow_profile` to inspect local project rules. Use `validate_workflow_profile` and `save_project_workflow_profile` to preview and explicitly save a project override.
+2. Call `get_active_plane_context` before work-item changes. If the workspace or project is wrong, use `list_configured_plane_workspaces` and `activate_plane_workspace`, then `list_plane_projects` and `activate_plane_project`.
+3. For an existing connection or unexpected failure, call `diagnose_plane_connection` with the project ID. Do not guess which Plane capabilities are enabled.
+4. Call `get_project_workflow_context` before writing. Use `get_workflow_options` when the request needs a state, cycle, assignee, estimate, or date.
+5. Use `get_project_workflow_profile` to inspect local project rules. Use `validate_workflow_profile` and `save_project_workflow_profile` to preview and explicitly save a project override.
 
 ## Reports
 
@@ -42,6 +43,7 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 ## Guardrails
 
 - Do not hardcode a title prefix, product, language, module, or label taxonomy. The active project profile may define one.
+- Prefer the active project rather than supplying `project_id` for mutations. The plugin rejects a conflicting project ID and checks that a referenced work item belongs to the selected project.
 - Treat `Bug` and `Improvement` as type labels, not title prefixes or redundant description text.
 - Preserve useful labels, descriptions, assignees, dates, and relationships when updating existing work.
 - Do not treat title similarity or audit advice as proof. Ask when a decision materially changes the work item.

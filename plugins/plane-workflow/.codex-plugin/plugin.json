@@ -1,6 +1,6 @@
 {
   "name": "plane-workflow",
-  "version": "0.2.0+codex.20260811143339",
+  "version": "0.3.0+codex.20260819000000",
   "description": "Configurable Plane work-item workflows and report exports for Codex.",
   "author": {
     "name": "Plane Workflow Contributors"
