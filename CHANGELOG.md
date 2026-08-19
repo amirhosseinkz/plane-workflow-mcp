@@ -5,6 +5,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-19
+
+### Changed
+
+- Documented workspace and project selection, switching, and wrong-project
+  safety checks in the repository README.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added

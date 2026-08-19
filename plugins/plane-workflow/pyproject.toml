@@ -1,6 +1,6 @@
 [project]
 name = "plane-workflow-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "Configurable Plane work-item workflow MCP server"
 readme = "README.md"
 requires-python = ">=3.11"
