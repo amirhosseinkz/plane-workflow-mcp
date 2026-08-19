@@ -26,11 +26,28 @@ class ConfigurationError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class StoredPlaneProject:
+    id: str
+    identifier: str | None = None
+    name: str | None = None
+
+
+@dataclass(frozen=True)
 class StoredPlaneSettings:
     base_url: str
     api_key: str
     workspace: str
     profile: str
+    active_project: StoredPlaneProject | None = None
+
+
+@dataclass(frozen=True)
+class StoredPlaneProfile:
+    base_url: str
+    workspace: str
+    profile: str
+    active: bool
+    active_project: StoredPlaneProject | None = None
 
 
 def configuration_directory() -> Path:
@@ -94,23 +111,122 @@ def _profile_record(payload: dict[str, object], profile: str | None) -> tuple[st
     return selected, record
 
 
+def _stored_project(values: dict[str, object], profile: str) -> StoredPlaneProject | None:
+    project = values.get("active_project")
+    if project is None:
+        return None
+    if not isinstance(project, dict):
+        raise ConfigurationError(f"Plane Workflow profile {profile!r} has an invalid active project.")
+    project_id = project.get("id")
+    identifier = project.get("identifier")
+    name = project.get("name")
+    if not isinstance(project_id, str) or not project_id.strip():
+        raise ConfigurationError(f"Plane Workflow profile {profile!r} has an invalid active project id.")
+    if identifier is not None and not isinstance(identifier, str):
+        raise ConfigurationError(f"Plane Workflow profile {profile!r} has an invalid active project identifier.")
+    if name is not None and not isinstance(name, str):
+        raise ConfigurationError(f"Plane Workflow profile {profile!r} has an invalid active project name.")
+    return StoredPlaneProject(id=project_id, identifier=identifier, name=name)
+
+
+def _profile_values(values: dict[str, object], profile: str) -> tuple[str, str, StoredPlaneProject | None]:
+    base_url = values.get("base_url")
+    workspace = values.get("workspace")
+    if not isinstance(base_url, str) or not base_url.strip() or not isinstance(workspace, str) or not workspace.strip():
+        raise ConfigurationError(f"Plane Workflow profile {profile!r} is missing its URL or workspace.")
+    return base_url, workspace, _stored_project(values, profile)
+
+
 def load_stored_plane_settings(profile: str | None = None) -> StoredPlaneSettings | None:
     """Load a configured profile and its secret, or None before first setup."""
     record = _profile_record(_read_settings(), profile)
     if record is None:
         return None
     selected, values = record
-    base_url = values.get("base_url")
-    workspace = values.get("workspace")
-    if not isinstance(base_url, str) or not base_url.strip() or not isinstance(workspace, str) or not workspace.strip():
-        raise ConfigurationError(f"Plane Workflow profile {selected!r} is missing its URL or workspace.")
+    base_url, workspace, active_project = _profile_values(values, selected)
     try:
         api_key = keyring.get_password(KEYRING_SERVICE, selected)
     except KeyringError as error:
         raise ConfigurationError("The operating-system keyring is unavailable. Run plane-workflow setup again.") from error
     if not api_key:
         raise ConfigurationError(f"Plane API key for profile {selected!r} is missing. Run plane-workflow setup.")
-    return StoredPlaneSettings(base_url=base_url, api_key=api_key, workspace=workspace, profile=selected)
+    return StoredPlaneSettings(
+        base_url=base_url,
+        api_key=api_key,
+        workspace=workspace,
+        profile=selected,
+        active_project=active_project,
+    )
+
+
+def list_stored_plane_profiles() -> list[StoredPlaneProfile]:
+    """List configured workspaces without reading any API keys from the keyring."""
+    payload = _read_settings()
+    profiles = payload.get("profiles", {})
+    if not isinstance(profiles, dict):
+        raise ConfigurationError("Plane Workflow settings must contain a profiles object.")
+    active_profile = payload.get("active_profile")
+    if active_profile is not None and (not isinstance(active_profile, str) or not active_profile.strip()):
+        raise ConfigurationError("The active Plane Workflow profile is invalid.")
+    result: list[StoredPlaneProfile] = []
+    for profile, values in profiles.items():
+        if not isinstance(profile, str) or not profile.strip() or not isinstance(values, dict):
+            raise ConfigurationError("Plane Workflow settings contain an invalid profile.")
+        base_url, workspace, active_project = _profile_values(values, profile)
+        result.append(
+            StoredPlaneProfile(
+                base_url=base_url,
+                workspace=workspace,
+                profile=profile,
+                active=profile == active_profile,
+                active_project=active_project,
+            )
+        )
+    return result
+
+
+def activate_stored_plane_profile(profile: str) -> StoredPlaneProfile:
+    """Make a configured workspace profile active without changing its secret."""
+    selected = profile.strip()
+    if not selected:
+        raise ConfigurationError("Plane Workflow profile is required.")
+    payload = _read_settings()
+    record = _profile_record(payload, selected)
+    if record is None:
+        raise ConfigurationError(f"Plane Workflow profile {selected!r} is not configured.")
+    _, values = record
+    base_url, workspace, active_project = _profile_values(values, selected)
+    payload["active_profile"] = selected
+    _write_settings(payload)
+    return StoredPlaneProfile(
+        base_url=base_url,
+        workspace=workspace,
+        profile=selected,
+        active=True,
+        active_project=active_project,
+    )
+
+
+def set_stored_active_project(*, profile: str, project_id: str, identifier: str | None, name: str | None) -> StoredPlaneProject:
+    """Persist a validated Plane project selection for one workspace profile."""
+    selected = profile.strip()
+    normalized_id = project_id.strip()
+    if not selected or not normalized_id:
+        raise ConfigurationError("Plane Workflow profile and project id are required.")
+    payload = _read_settings()
+    record = _profile_record(payload, selected)
+    if record is None:
+        raise ConfigurationError(f"Plane Workflow profile {selected!r} is not configured.")
+    _, values = record
+    project = StoredPlaneProject(
+        id=normalized_id,
+        identifier=identifier.strip() if isinstance(identifier, str) and identifier.strip() else None,
+        name=name.strip() if isinstance(name, str) and name.strip() else None,
+    )
+    values["active_project"] = {"id": project.id, "identifier": project.identifier, "name": project.name}
+    payload["active_profile"] = selected
+    _write_settings(payload)
+    return project
 
 
 def save_stored_plane_settings(*, base_url: str, workspace: str, api_key: str, profile: str = "default") -> Path:
@@ -118,19 +234,23 @@ def save_stored_plane_settings(*, base_url: str, workspace: str, api_key: str, p
     normalized_url = base_url.rstrip("/").strip()
     normalized_workspace = workspace.strip()
     normalized_key = api_key.strip()
-    if not normalized_url or not normalized_workspace or not normalized_key:
+    normalized_profile = profile.strip()
+    if not normalized_url or not normalized_workspace or not normalized_key or not normalized_profile:
         raise ConfigurationError("Plane URL, workspace, and API key are all required.")
     try:
-        keyring.set_password(KEYRING_SERVICE, profile, normalized_key)
+        keyring.set_password(KEYRING_SERVICE, normalized_profile, normalized_key)
     except KeyringError as error:
         raise ConfigurationError("Could not store the Plane API key in the operating-system keyring.") from error
     payload = _read_settings()
     profiles = payload.setdefault("profiles", {})
     if not isinstance(profiles, dict):
         raise ConfigurationError("Plane Workflow settings must contain a profiles object.")
-    profiles[profile] = {"base_url": normalized_url, "workspace": normalized_workspace}
-    payload["version"] = 1
-    payload["active_profile"] = profile
+    previous = profiles.get(normalized_profile)
+    profiles[normalized_profile] = {"base_url": normalized_url, "workspace": normalized_workspace}
+    if isinstance(previous, dict) and previous.get("workspace") == normalized_workspace and isinstance(previous.get("active_project"), dict):
+        profiles[normalized_profile]["active_project"] = previous["active_project"]
+    payload["version"] = 2
+    payload["active_profile"] = normalized_profile
     return _write_settings(payload)
 
 

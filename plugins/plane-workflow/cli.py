@@ -282,8 +282,133 @@ def command_status(arguments: argparse.Namespace) -> int:
     except configuration.ConfigurationError as error:
         print(json.dumps({"status": "needs_setup", "configured": False, "next_command": "plane-workflow setup", "reason": str(error)}, indent=2))
         return 1
-    print(json.dumps({"status": "configured" if settings else "needs_setup", "configured": settings is not None, "profile": settings.profile if settings else None, "base_url": settings.base_url if settings else None, "workspace": settings.workspace if settings else None, "detected_clients": detected_clients(), "next_command": None if settings else "plane-workflow setup"}, indent=2))
+    print(
+        json.dumps(
+            {
+                "status": "configured" if settings else "needs_setup",
+                "configured": settings is not None,
+                "profile": settings.profile if settings else None,
+                "base_url": settings.base_url if settings else None,
+                "workspace": settings.workspace if settings else None,
+                "active_project": _project_view(settings.active_project) if settings else None,
+                "detected_clients": detected_clients(),
+                "next_command": None if settings else "plane-workflow setup",
+            },
+            indent=2,
+        )
+    )
     return 0 if settings else 1
+
+
+def _project_view(project: configuration.StoredPlaneProject | None) -> dict[str, str | None] | None:
+    if project is None:
+        return None
+    return {"id": project.id, "identifier": project.identifier, "name": project.name}
+
+
+def command_workspace_list(_: argparse.Namespace) -> int:
+    profiles = configuration.list_stored_plane_profiles()
+    print(
+        json.dumps(
+            {
+                "status": "configured" if profiles else "needs_setup",
+                "workspaces": [
+                    {
+                        "profile": profile.profile,
+                        "base_url": profile.base_url,
+                        "workspace": profile.workspace,
+                        "active": profile.active,
+                        "active_project": _project_view(profile.active_project),
+                    }
+                    for profile in profiles
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 0 if profiles else 1
+
+
+def command_workspace_activate(arguments: argparse.Namespace) -> int:
+    profile = configuration.activate_stored_plane_profile(arguments.profile)
+    print(
+        json.dumps(
+            {
+                "status": "activated",
+                "workspace": profile.workspace,
+                "profile": profile.profile,
+                "active_project": _project_view(profile.active_project),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _active_stored_settings() -> configuration.StoredPlaneSettings:
+    settings = configuration.load_stored_plane_settings()
+    if settings is None:
+        raise SetupError("No active Plane workspace is configured. Run plane-workflow setup first.")
+    return settings
+
+
+def command_project_list(_: argparse.Namespace) -> int:
+    settings = _active_stored_settings()
+    api = server.PlaneApi(
+        server.PlaneSettings(
+            base_url=settings.base_url,
+            workspace=settings.workspace,
+            api_key=settings.api_key,
+            profile=settings.profile,
+        )
+    )
+    projects = api.projects()
+    print(
+        json.dumps(
+            {
+                "status": "projects",
+                "workspace": settings.workspace,
+                "active_project": _project_view(settings.active_project),
+                "projects": [
+                    {"id": project.get("id"), "identifier": project.get("identifier"), "name": project.get("name")}
+                    for project in projects
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def command_project_activate(arguments: argparse.Namespace) -> int:
+    settings = _active_stored_settings()
+    api = server.PlaneApi(
+        server.PlaneSettings(
+            base_url=settings.base_url,
+            workspace=settings.workspace,
+            api_key=settings.api_key,
+            profile=settings.profile,
+        )
+    )
+    project = api.project(arguments.project_id)
+    active_project = configuration.set_stored_active_project(
+        profile=settings.profile,
+        project_id=str(project.get("id") or arguments.project_id),
+        identifier=str(project["identifier"]) if project.get("identifier") else None,
+        name=str(project["name"]) if project.get("name") else None,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "activated",
+                "workspace": settings.workspace,
+                "profile": settings.profile,
+                "active_project": _project_view(active_project),
+            },
+            indent=2,
+        )
+    )
+    return 0
 
 
 def command_remove(arguments: argparse.Namespace) -> int:
@@ -317,6 +442,18 @@ def build_parser() -> argparse.ArgumentParser:
     status = subcommands.add_parser("status", help="show setup status without exposing credentials")
     status.add_argument("--profile")
     status.set_defaults(handler=command_status)
+    workspace = subcommands.add_parser("workspace", help="list or switch configured Plane workspaces")
+    workspace_commands = workspace.add_subparsers(dest="workspace_command", required=True)
+    workspace_commands.add_parser("list", help="list configured workspaces and their selected projects").set_defaults(handler=command_workspace_list)
+    workspace_activate = workspace_commands.add_parser("activate", help="switch the active workspace profile")
+    workspace_activate.add_argument("profile")
+    workspace_activate.set_defaults(handler=command_workspace_activate)
+    project = subcommands.add_parser("project", help="list or switch projects in the active workspace")
+    project_commands = project.add_subparsers(dest="project_command", required=True)
+    project_commands.add_parser("list", help="list projects in the active workspace").set_defaults(handler=command_project_list)
+    project_activate = project_commands.add_parser("activate", help="select a project for work-item operations")
+    project_activate.add_argument("project_id")
+    project_activate.set_defaults(handler=command_project_activate)
     remove = subcommands.add_parser("remove", help="remove a configured client and local credentials")
     remove.add_argument("--client", choices=CLIENTS)
     remove.add_argument("--profile", default="default")
@@ -337,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         return int(arguments.handler(arguments))
-    except (SetupError, configuration.ConfigurationError) as error:
+    except (SetupError, configuration.ConfigurationError, server.PlaneWorkflowError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 

@@ -23,7 +23,14 @@ from uuid import uuid4
 import requests
 from fastmcp import FastMCP
 
-from configuration import ConfigurationError, load_stored_plane_settings
+from configuration import (
+    ConfigurationError,
+    StoredPlaneProject,
+    activate_stored_plane_profile,
+    list_stored_plane_profiles,
+    load_stored_plane_settings,
+    set_stored_active_project,
+)
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parent
@@ -43,6 +50,7 @@ class PlaneSettings:
     base_url: str
     api_key: str
     workspace: str
+    profile: str | None = None
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -187,12 +195,12 @@ def _find_plane_settings() -> PlaneSettings:
 
     stored_error: ConfigurationError | None = None
     try:
-        stored = load_stored_plane_settings()
+        stored = load_stored_plane_settings(os.getenv("PLANE_WORKFLOW_PROFILE"))
     except ConfigurationError as error:
         stored = None
         stored_error = error
     if stored:
-        return PlaneSettings(base_url=stored.base_url, api_key=stored.api_key, workspace=stored.workspace)
+        return PlaneSettings(base_url=stored.base_url, api_key=stored.api_key, workspace=stored.workspace, profile=stored.profile)
 
     config_path = Path.home() / ".codex" / "config.toml"
     if not config_path.exists():
@@ -232,6 +240,7 @@ class PlaneApi:
     def __init__(self, settings: PlaneSettings) -> None:
         self.base_url = settings.base_url.rstrip("/")
         self.workspace = settings.workspace
+        self.profile = settings.profile
         self.session = requests.Session()
         self.session.headers.update({"X-API-Key": settings.api_key, "Accept": "application/json"})
 
@@ -254,6 +263,9 @@ class PlaneApi:
 
     def project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"projects/{project_id}")
+
+    def projects(self) -> list[dict[str, Any]]:
+        return _results(self.request("GET", "projects", params={"per_page": 1000}))
 
     def modules(self, project_id: str) -> list[dict[str, Any]]:
         return _results(self.request("GET", f"projects/{project_id}/modules", params={"per_page": 1000}))
@@ -390,6 +402,69 @@ class PlaneApi:
                 params={"per_page": 1000},
             )
         )
+
+
+def _project_view(project: StoredPlaneProject | None) -> dict[str, str | None] | None:
+    if project is None:
+        return None
+    return {"id": project.id, "identifier": project.identifier, "name": project.name}
+
+
+def _active_project(api: PlaneApi) -> StoredPlaneProject | None:
+    """Return the project selected for the credential profile backing this API client."""
+    if not api.profile:
+        return None
+    try:
+        stored = load_stored_plane_settings(api.profile)
+    except ConfigurationError as error:
+        raise PlaneWorkflowError(str(error)) from error
+    if stored is None or stored.workspace != api.workspace:
+        return None
+    return stored.active_project
+
+
+def _project_id(api: PlaneApi, project_id: str | None, *, enforce_active: bool = False) -> str:
+    selected = _text(project_id)
+    active_project = _active_project(api)
+    if not selected:
+        if active_project is None:
+            raise PlaneWorkflowError(
+                "No active Plane project is selected. Call activate_plane_project or provide project_id."
+            )
+        return active_project.id
+    if enforce_active and active_project is not None and selected != active_project.id:
+        active_label = active_project.identifier or active_project.name or active_project.id
+        raise PlaneWorkflowError(
+            f"Project {selected!r} is not the active project ({active_label!r}). "
+            "Call activate_plane_project first to prevent changing the wrong project."
+        )
+    return selected
+
+
+def _work_item_for_project(api: PlaneApi, project_id: str, work_item_id: str) -> dict[str, Any]:
+    """Read a work item and turn cross-project misses into an actionable safety error."""
+    selected_item = _text(work_item_id)
+    if not selected_item:
+        raise PlaneWorkflowError("work_item_id is required.")
+    try:
+        work_item = api.work_item(project_id, selected_item)
+    except PlaneWorkflowError as error:
+        raise PlaneWorkflowError(
+            f"Work item {selected_item!r} was not found in project {project_id!r}. "
+            "It may belong to a different project; activate that project before changing it."
+        ) from error
+    embedded_project = work_item.get("project")
+    embedded_project_id = work_item.get("project_id")
+    if isinstance(embedded_project, dict):
+        embedded_project_id = embedded_project_id or embedded_project.get("id")
+    elif isinstance(embedded_project, str):
+        embedded_project_id = embedded_project_id or embedded_project
+    if embedded_project_id is not None and _text(str(embedded_project_id)) != project_id:
+        raise PlaneWorkflowError(
+            f"Work item {selected_item!r} belongs to project {_text(str(embedded_project_id))!r}, "
+            f"not {project_id!r}. Activate its project before changing it."
+        )
+    return work_item
 
 
 def _results(payload: Any) -> list[dict[str, Any]]:
@@ -1005,7 +1080,8 @@ mcp = FastMCP(
     instructions=(
         "Use these tools to create and maintain Plane work items through configurable workflow rules. "
         "For a new installation, call get_plane_workflow_setup_status first and run plane-workflow setup "
-        "when it reports needs_setup. Use get_project_workflow_context before writes and audit_work_items before bulk changes."
+        "when it reports needs_setup. Before writes, call get_active_plane_context and select the intended "
+        "workspace and project when needed. Use get_project_workflow_context before writes and audit_work_items before bulk changes."
     ),
 )
 
@@ -1026,7 +1102,15 @@ def get_plane_workflow_setup_status() -> dict[str, Any]:
             "recommendation": str(error),
         }
     if stored:
-        return {"status": "configured", "configured": True, "source": "operating-system keyring", "next_command": None}
+        return {
+            "status": "configured",
+            "configured": True,
+            "source": "operating-system keyring",
+            "workspace_profile": stored.profile,
+            "workspace": stored.workspace,
+            "active_project": _project_view(stored.active_project),
+            "next_command": None,
+        }
     try:
         _find_plane_settings()
     except PlaneWorkflowError:
@@ -1042,9 +1126,108 @@ def get_plane_workflow_setup_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_project_workflow_context(project_id: str) -> dict[str, Any]:
+def list_configured_plane_workspaces() -> dict[str, Any]:
+    """List locally configured Plane workspaces and the project selected in each, without contacting Plane."""
+    profiles = list_stored_plane_profiles()
+    return {
+        "status": "configured" if profiles else "needs_setup",
+        "workspaces": [
+            {
+                "profile": profile.profile,
+                "base_url": profile.base_url,
+                "workspace": profile.workspace,
+                "active": profile.active,
+                "active_project": _project_view(profile.active_project),
+            }
+            for profile in profiles
+        ],
+        "note": "Use activate_plane_workspace to switch the active workspace. API keys are never returned.",
+    }
+
+
+@mcp.tool()
+def activate_plane_workspace(profile: str) -> dict[str, Any]:
+    """Switch to a configured Plane workspace profile without contacting Plane or exposing its API key."""
+    selected = activate_stored_plane_profile(profile)
+    return {
+        "status": "activated",
+        "workspace": {
+            "profile": selected.profile,
+            "base_url": selected.base_url,
+            "workspace": selected.workspace,
+            "active_project": _project_view(selected.active_project),
+        },
+        "note": "This workspace is now active. Its project selection is retained independently.",
+    }
+
+
+@mcp.tool()
+def get_active_plane_context() -> dict[str, Any]:
+    """Show the active Plane workspace and project without exposing credentials or changing Plane."""
+    try:
+        settings = _find_plane_settings()
+    except PlaneWorkflowError as error:
+        return {"status": "needs_setup", "configured": False, "reason": str(error)}
+    active_project = _active_project(PlaneApi(settings))
+    source = "environment" if all(os.getenv(name) for name in ("PLANE_BASE_URL", "PLANE_API_KEY", "PLANE_WORKSPACE_SLUG")) else "stored_profile"
+    return {
+        "status": "active_context",
+        "configured": True,
+        "source": source,
+        "workspace": {"profile": settings.profile, "base_url": settings.base_url, "slug": settings.workspace},
+        "project": _project_view(active_project),
+        "note": "Select a project with activate_plane_project before work-item changes when no project is shown.",
+    }
+
+
+@mcp.tool()
+def list_plane_projects() -> dict[str, Any]:
+    """List projects in the active Plane workspace so one can be selected without changing Plane."""
+    api = PlaneApi(_find_plane_settings())
+    active_project = _active_project(api)
+    projects = api.projects()
+    return {
+        "status": "projects",
+        "workspace": api.workspace,
+        "active_project": _project_view(active_project),
+        "projects": [
+            {"id": project.get("id"), "identifier": project.get("identifier"), "name": project.get("name")}
+            for project in projects
+        ],
+        "note": "Call activate_plane_project with a project id to make it the default for work-item tools.",
+    }
+
+
+@mcp.tool()
+def activate_plane_project(project_id: str) -> dict[str, Any]:
+    """Validate and select a project in the active stored workspace for future work-item operations."""
+    settings = _find_plane_settings()
+    if not settings.profile:
+        raise PlaneWorkflowError(
+            "The active workspace comes from environment credentials and cannot retain a project selection. "
+            "Run plane-workflow setup to configure a named workspace profile."
+        )
+    api = PlaneApi(settings)
+    project = api.project(_text(project_id))
+    active_project = set_stored_active_project(
+        profile=settings.profile,
+        project_id=str(project.get("id") or project_id),
+        identifier=_text(str(project.get("identifier", ""))) or None,
+        name=_text(str(project.get("name", ""))) or None,
+    )
+    return {
+        "status": "activated",
+        "workspace": {"profile": settings.profile, "slug": settings.workspace},
+        "project": _project_view(active_project),
+        "note": "Work-item changes now default to this project and reject a conflicting project id.",
+    }
+
+
+@mcp.tool()
+def get_project_workflow_context(project_id: str | None = None) -> dict[str, Any]:
     """Read a project's identifiers, active profile, modules, labels, and work-item count without changing Plane."""
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     profile, project = _resolve_profile(api, project_id)
     work_items, total_count = api.work_items(project_id)
     return {
@@ -1058,9 +1241,10 @@ def get_project_workflow_context(project_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_project_workflow_profile(project_id: str) -> dict[str, Any]:
+def get_project_workflow_profile(project_id: str | None = None) -> dict[str, Any]:
     """Read the merged workflow profile for a Plane project without changing Plane or local profile files."""
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     profile, project = _resolve_profile(api, project_id)
     return {
         "status": "profile",
@@ -1073,9 +1257,10 @@ def get_project_workflow_profile(project_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_workflow_options(project_id: str) -> dict[str, Any]:
+def get_workflow_options(project_id: str | None = None) -> dict[str, Any]:
     """List the available state, cycle, and assignee choices for a project without changing Plane."""
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     project = api.project(project_id)
     states, state_capability = _optional_options(lambda: api.states(project_id))
     cycles, cycle_capability = _optional_options(lambda: api.cycles(project_id))
@@ -1123,6 +1308,8 @@ def diagnose_plane_connection(project_id: str | None = None) -> dict[str, Any]:
         }
 
     api = PlaneApi(settings)
+    if project_id is None and _active_project(api) is not None:
+        project_id = _project_id(api, None)
     checks: dict[str, dict[str, Any]] = {"project": _connection_probe(lambda: api.project(project_id))}
     if not checks["project"]["available"]:
         return {
@@ -1192,8 +1379,8 @@ def validate_workflow_profile(profile: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool()
 def save_project_workflow_profile(
-    project_id: str,
     profile: dict[str, Any],
+    project_id: str | None = None,
     replace_existing: bool = False,
     confirm: bool = False,
 ) -> dict[str, Any]:
@@ -1207,6 +1394,7 @@ def save_project_workflow_profile(
         return {"status": "invalid", "valid": False, "errors": errors, "note": "No profile was saved."}
 
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     project = api.project(project_id)
     binding = _project_profile_match(api, project)
     user_config = _user_profile_config()
@@ -1252,11 +1440,12 @@ def save_project_workflow_profile(
 
 
 @mcp.tool()
-def create_standardization_plan(project_id: str, expires_in_hours: int = 24) -> dict[str, Any]:
+def create_standardization_plan(project_id: str | None = None, expires_in_hours: int = 24) -> dict[str, Any]:
     """Create and save a read-only cleanup proposal. The plan does not change Plane until apply_standardization_plan is confirmed."""
     if isinstance(expires_in_hours, bool) or not isinstance(expires_in_hours, int) or not 1 <= expires_in_hours <= 168:
         raise PlaneWorkflowError("expires_in_hours must be a whole number from 1 to 168.")
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     profile, project = _resolve_profile(api, project_id)
     items, total_count = api.work_items(project_id)
     actions, advisories = _build_standardization_actions(items, api.labels(project_id), profile)
@@ -1323,6 +1512,7 @@ def apply_standardization_plan(plan_id: str, confirm: bool = False) -> dict[str,
         raise PlaneWorkflowError("The saved plan is missing its Plane project.")
     project_id = str(project_data["id"])
     api = PlaneApi(_find_plane_settings())
+    _project_id(api, project_id, enforce_active=True)
     profile, project = _resolve_profile(api, project_id)
     if plan.get("workspace") != api.workspace or project.get("identifier") != project_data.get("identifier"):
         raise PlaneWorkflowError("This plan was created for a different Plane workspace or project and cannot be applied here.")
@@ -1340,7 +1530,7 @@ def apply_standardization_plan(plan_id: str, confirm: bool = False) -> dict[str,
             failed.append({"work_item_id": work_item_id or None, "reason": "invalid_saved_action"})
             continue
         try:
-            current = api.work_item(project_id, work_item_id)
+            current = _work_item_for_project(api, project_id, work_item_id)
             if action.get("fingerprint") != _item_fingerprint(current):
                 skipped_stale.append({"work_item": _work_item_summary(current), "reason": "changed_since_plan"})
                 continue
@@ -1383,8 +1573,8 @@ def apply_standardization_plan(plan_id: str, confirm: bool = False) -> dict[str,
 
 @mcp.tool()
 def find_duplicate_candidates(
-    project_id: str,
-    title: str,
+    project_id: str | None = None,
+    title: str = "",
     min_score: float = 0.55,
     max_results: int = 5,
 ) -> dict[str, Any]:
@@ -1397,6 +1587,7 @@ def find_duplicate_candidates(
     if not candidate_title:
         raise PlaneWorkflowError("title is required.")
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     items, _ = api.work_items(project_id)
     candidates = _duplicate_candidates(items, candidate_title, min_score=min_score)[:max_results]
     return {
@@ -1409,7 +1600,7 @@ def find_duplicate_candidates(
 
 
 @mcp.tool()
-def find_work_items(project_id: str, query: str, max_results: int = 10) -> dict[str, Any]:
+def find_work_items(project_id: str | None = None, query: str = "", max_results: int = 10) -> dict[str, Any]:
     """Find Plane work items by their title, UUID, or project reference such as PROJECT-12 without changing Plane."""
     if isinstance(max_results, bool) or not isinstance(max_results, int) or not 1 <= max_results <= 20:
         raise PlaneWorkflowError("max_results must be a whole number from 1 to 20.")
@@ -1417,6 +1608,7 @@ def find_work_items(project_id: str, query: str, max_results: int = 10) -> dict[
     if not search_query:
         raise PlaneWorkflowError("query is required.")
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     project = api.project(project_id)
     items, _ = api.work_items(project_id)
     results = _work_item_search_results(items, search_query, project_identifier=_text(str(project.get("identifier", ""))) or None)
@@ -1430,13 +1622,18 @@ def find_work_items(project_id: str, query: str, max_results: int = 10) -> dict[
 
 @mcp.tool()
 def add_work_item_evidence_links(
-    project_id: str,
-    work_item_id: str,
-    evidence: list[dict[str, str]],
+    project_id: str | None = None,
+    work_item_id: str = "",
+    evidence: list[dict[str, str]] | None = None,
     note: str | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Preview or attach validated evidence links to one work item. Set confirm=true to create the links."""
+    if evidence is None:
+        raise PlaneWorkflowError("evidence is required.")
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
+    existing = _work_item_for_project(api, project_id, work_item_id)
     normalized_links = _normalize_evidence_links(evidence)
     note_text = _text(note)
     if len(note_text) > 2000:
@@ -1444,13 +1641,13 @@ def add_work_item_evidence_links(
     if not confirm:
         return {
             "status": "preview",
+            "project_id": project_id,
             "work_item_id": work_item_id,
             "evidence": normalized_links,
             "note": note_text or None,
             "message": "No Plane data was changed. Set confirm=true to attach these links.",
         }
 
-    api = PlaneApi(_find_plane_settings())
     existing_urls = {
         _text(str(link.get("url", "")))
         for link in api.work_item_links(project_id, work_item_id)
@@ -1467,7 +1664,6 @@ def add_work_item_evidence_links(
         created.append({"id": created_link.get("id"), "url": url, "title": link.get("title")})
     note_updated = False
     if note_text:
-        existing = api.work_item(project_id, work_item_id)
         api.update_work_item(
             project_id,
             work_item_id,
@@ -1476,6 +1672,7 @@ def add_work_item_evidence_links(
         note_updated = True
     return {
         "status": "attached",
+        "project_id": project_id,
         "work_item_id": work_item_id,
         "created": created,
         "already_present": skipped,
@@ -1485,15 +1682,19 @@ def add_work_item_evidence_links(
 
 @mcp.tool()
 def upload_work_item_attachment(
-    project_id: str,
-    work_item_id: str,
-    file_path: str,
+    project_id: str | None = None,
+    work_item_id: str = "",
+    file_path: str = "",
     max_size_mb: int = 25,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Preview or upload one local file as a Plane attachment. Set confirm=true to upload the file."""
     metadata = _attachment_metadata(file_path, max_size_mb)
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
+    _work_item_for_project(api, project_id, work_item_id)
     preview = {
+        "project_id": project_id,
         "work_item_id": work_item_id,
         "attachment": {"name": metadata["name"], "size": metadata["size"], "type": metadata["type"]},
     }
@@ -1507,7 +1708,6 @@ def upload_work_item_attachment(
         file_bytes = metadata["path"].read_bytes()
     except OSError as error:
         raise PlaneWorkflowError("The attachment file could not be read.") from error
-    api = PlaneApi(_find_plane_settings())
     attachment = api.upload_work_item_attachment(
         project_id,
         work_item_id,
@@ -1525,9 +1725,9 @@ def upload_work_item_attachment(
 
 @mcp.tool()
 def create_standard_work_item(
-    project_id: str,
-    outcome: str,
-    acceptance_criteria: list[str],
+    project_id: str | None = None,
+    outcome: str = "",
+    acceptance_criteria: list[str] | None = None,
     work_item_type: Literal["bug", "improvement", "task"] = "task",
     context: str | None = None,
     module_name: str | None = None,
@@ -1551,6 +1751,10 @@ def create_standard_work_item(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Create a structured Plane work item with labels, duplicate review, optional module/cycle assignment, and planning fields."""
+    if not _text(outcome):
+        raise PlaneWorkflowError("outcome is required.")
+    if not acceptance_criteria:
+        raise PlaneWorkflowError("acceptance_criteria is required.")
     if work_item_type not in VALID_TYPES:
         raise PlaneWorkflowError("work_item_type must be bug, improvement, or task.")
     selected_assignees = _validate_id_list(assignee_ids, "assignee_ids")
@@ -1561,6 +1765,7 @@ def create_standard_work_item(
     selected_start_date = _validate_date(start_date, "start_date")
     selected_target_date = _validate_date(target_date, "target_date")
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
     profile, _ = _resolve_profile(api, project_id)
     _validate_workflow_selection(
         api,
@@ -1653,8 +1858,8 @@ def create_standard_work_item(
 
 @mcp.tool()
 def update_standard_work_item(
-    project_id: str,
-    work_item_id: str,
+    project_id: str | None = None,
+    work_item_id: str = "",
     outcome: str | None = None,
     acceptance_criteria: list[str] | None = None,
     work_item_type: Literal["bug", "improvement", "task"] | None = None,
@@ -1690,6 +1895,7 @@ def update_standard_work_item(
     selected_start_date = _validate_date(start_date, "start_date")
     selected_target_date = _validate_date(target_date, "target_date")
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
     profile, _ = _resolve_profile(api, project_id)
     _validate_workflow_selection(
         api,
@@ -1699,7 +1905,7 @@ def update_standard_work_item(
         cycle_id=selected_cycle,
         release_id=selected_release,
     )
-    existing = api.work_item(project_id, work_item_id)
+    existing = _work_item_for_project(api, project_id, work_item_id)
     payload: dict[str, Any] = {}
     if priority:
         if priority not in VALID_PRIORITIES:
@@ -1788,8 +1994,8 @@ def update_standard_work_item(
 
 @mcp.tool()
 def ensure_module(
-    project_id: str,
-    module_name: str,
+    project_id: str | None = None,
+    module_name: str = "",
     work_item_ids: list[str] | None = None,
     description: str | None = None,
     create_if_missing: bool = False,
@@ -1797,6 +2003,9 @@ def ensure_module(
 ) -> dict[str, Any]:
     """Preview or find an existing module, then explicitly create or assign it when requested."""
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
+    for work_item_id in work_item_ids or []:
+        _work_item_for_project(api, project_id, work_item_id)
     if dry_run:
         module_preview = _module_preview(
             api,
@@ -1818,9 +2027,10 @@ def ensure_module(
 
 
 @mcp.tool()
-def audit_work_items(project_id: str) -> dict[str, Any]:
+def audit_work_items(project_id: str | None = None) -> dict[str, Any]:
     """Audit Plane work items without changing them. Reports structural and quality gaps for a human-approved cleanup."""
     api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
     profile, _ = _resolve_profile(api, project_id)
     labels = api.labels(project_id)
     type_labels = _type_labels(profile)
@@ -1884,8 +2094,8 @@ def audit_work_items(project_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def export_work_items_report(
-    project_id: str,
     format: Literal["docx", "pdf"],
+    project_id: str | None = None,
     filters: dict[str, Any] | None = None,
     layout: dict[str, Any] | None = None,
     title: str | None = None,
@@ -1899,9 +2109,10 @@ def export_work_items_report(
     from reports import ReportError, export_work_items_report as export_report
 
     try:
+        api = PlaneApi(_find_plane_settings())
         return export_report(
-            PlaneApi(_find_plane_settings()),
-            project_id=project_id,
+            api,
+            project_id=_project_id(api, project_id),
             report_format=format,
             title=title,
             filters=filters,
