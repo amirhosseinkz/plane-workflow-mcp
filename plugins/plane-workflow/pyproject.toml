@@ -17,7 +17,7 @@ classifiers = [
   "Topic :: Software Development",
 ]
 dependencies = [
-  "fastmcp>=3.2.0,<4",
+  "fastmcp>=3.2.0,<5",
   "keyring>=25.0,<26",
   "pydantic>=2.11,<3",
   "pypdf>=6.15.0",
