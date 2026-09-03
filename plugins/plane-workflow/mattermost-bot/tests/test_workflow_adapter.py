@@ -75,6 +75,31 @@ class WorkflowAdapterTests(unittest.TestCase):
         self.assertNotIn("project_id", result.arguments)
         self.assertNotIn("dry_run", result.arguments)
 
+    def test_lifecycle_actions_are_previewed_before_confirmation(self) -> None:
+        captured: list[tuple[str, dict[str, object]]] = []
+
+        def start_standard_work_item(**arguments: object) -> dict[str, object]:
+            captured.append(("start", arguments))
+            return {"status": "preview"}
+
+        def complete_standard_work_item(**arguments: object) -> dict[str, object]:
+            captured.append(("complete", arguments))
+            return {"status": "preview"}
+
+        with patch.object(workflow_adapter.workflow, "start_standard_work_item", start_standard_work_item), patch.object(
+            workflow_adapter.workflow, "complete_standard_work_item", complete_standard_work_item
+        ):
+            start = self.adapter.execute("start_standard_work_item", {"work_item_id": "item-id"})
+            complete = self.adapter.execute(
+                "complete_standard_work_item",
+                {"work_item_id": "item-id", "summary": "Finished", "verification": ["Tests pass"]},
+            )
+
+        self.assertTrue(start.requires_confirmation)
+        self.assertTrue(complete.requires_confirmation)
+        self.assertTrue(captured[0][1]["dry_run"])
+        self.assertTrue(captured[1][1]["dry_run"])
+
     def test_unknown_action_is_rejected(self) -> None:
         with self.assertRaisesRegex(WorkflowAdapterError, "not available"):
             self.adapter.execute("delete_everything", {})
@@ -90,10 +115,15 @@ class WorkflowAdapterTests(unittest.TestCase):
         api.session = session
 
         api.create_module("project-id", {"name": "Monitoring", "status": "backlog"})
+        api.create_work_item_comment("project-id", "item-id", {"comment_html": "<p>Done</p>"})
 
         self.assertEqual(
             session.calls[0][1],
             "https://tasks.example.test/api/v1/workspaces/workspace/projects/project-id/modules/",
+        )
+        self.assertEqual(
+            session.calls[1][1],
+            "https://tasks.example.test/api/v1/workspaces/workspace/projects/project-id/work-items/item-id/comments/",
         )
 
     def test_module_creation_omits_empty_optional_fields(self) -> None:

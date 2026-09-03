@@ -61,6 +61,7 @@ WORKFLOW_TOOLS: list[dict[str, Any]] = [
         "module_name": _string("Existing module unless the user explicitly requests a new one."),
         "surface": _string("Screen, flow, component, or scope."),
         "scope": _string("Affected area and constraints."),
+        "complexity": {"type": "string", "enum": ["tiny", "small", "medium", "large"], "description": "Human planning complexity based on scope, risk, dependencies, and verification effort."},
         "priority": {"type": "string", "enum": ["urgent", "high", "medium", "low", "none"]},
         "current_behavior": _string("Required for a bug: what happens now."),
         "expected_behavior": _string("Required for a bug: what should happen."),
@@ -73,6 +74,20 @@ WORKFLOW_TOOLS: list[dict[str, Any]] = [
         "target_date": _string("YYYY-MM-DD."),
         "cycle_id": _string("Known cycle ID from get_workflow_options."),
     }, ["outcome", "acceptance_criteria"])),
+    _function("start_standard_work_item", "Draft starting a planned work item and recording its actual start date.", _object("Start details.", {
+        "work_item_id": _string("Work-item UUID returned by find_work_items."),
+        "state_id": _string("Optional started-state ID; otherwise the project profile default is used."),
+        "start_date": _string("Optional actual start date in YYYY-MM-DD format."),
+    }, ["work_item_id"])),
+    _function("complete_standard_work_item", "Draft a factual completion comment, optional worklog, and completed-state transition for started work.", _object("Completion details.", {
+        "work_item_id": _string("Work-item UUID returned by find_work_items."),
+        "summary": _string("Concise factual summary of the completed outcome."),
+        "verification": _string_list("Checks that were actually performed."),
+        "implementation_notes": _string_list("Important implementation work, decisions, or complications."),
+        "follow_ups": _string_list("Known limitations or remaining work; omit when there are none."),
+        "actual_minutes": {"type": "integer", "minimum": 1, "description": "Actual active time only; never copy the estimate here."},
+        "state_id": _string("Optional completed-state ID; otherwise the project profile default is used."),
+    }, ["work_item_id", "summary", "verification"])),
     _function("update_standard_work_item", "Draft an update for one known Plane work item. Look it up first when only a title or reference is known.", _object("Update details.", {
         "work_item_id": _string("Work-item UUID returned by find_work_items."),
         "outcome": _string("New clear outcome/title."),
@@ -124,6 +139,8 @@ PROJECT_BOUND_ACTIONS = {
     "audit_work_items",
     "create_standardization_plan",
     "create_standard_work_item",
+    "start_standard_work_item",
+    "complete_standard_work_item",
     "update_standard_work_item",
     "ensure_module",
     "save_project_workflow_profile",
@@ -134,6 +151,8 @@ PROJECT_BOUND_ACTIONS = {
 WRITE_ACTIONS = {
     "apply_standardization_plan",
     "create_standard_work_item",
+    "start_standard_work_item",
+    "complete_standard_work_item",
     "update_standard_work_item",
     "ensure_module",
     "save_project_workflow_profile",
@@ -180,7 +199,7 @@ class WorkflowAdapter:
     @staticmethod
     def _set_preview_mode(name: str, arguments: dict[str, Any], preview: bool) -> dict[str, Any]:
         adjusted = dict(arguments)
-        if name in {"create_standard_work_item", "update_standard_work_item", "ensure_module"}:
+        if name in {"create_standard_work_item", "start_standard_work_item", "complete_standard_work_item", "update_standard_work_item", "ensure_module"}:
             adjusted["dry_run"] = preview
         elif name in {"apply_standardization_plan", "save_project_workflow_profile", "add_work_item_evidence_links", "upload_work_item_attachment"}:
             adjusted["confirm"] = not preview

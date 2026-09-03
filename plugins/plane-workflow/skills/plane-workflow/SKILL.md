@@ -12,7 +12,7 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 1. For a first-time connection, call `get_plane_workflow_setup_status`. If it returns `needs_setup`, tell the user to run `plane-workflow setup`; do not ask them to paste an API key into the chat or a client config file.
 2. Call `get_active_plane_context` before work-item changes. If the workspace or project is wrong, use `list_configured_plane_workspaces` and `activate_plane_workspace`, then `list_plane_projects` and `activate_plane_project`.
 3. For an existing connection or unexpected failure, call `diagnose_plane_connection` with the project ID. Do not guess which Plane capabilities are enabled.
-4. Call `get_project_workflow_context` before writing. Use `get_workflow_options` when the request needs a state, cycle, assignee, estimate, or date.
+4. Call `get_project_workflow_context` before writing. Use `get_workflow_options` for state, cycle, assignee, and Plane estimate-point IDs.
 5. Use `get_project_workflow_profile` to inspect local project rules. Use `validate_workflow_profile` and `save_project_workflow_profile` to preview and explicitly save a project override.
 
 ## Reports
@@ -23,11 +23,21 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 
 ## Create and Update Work
 
-1. Turn the request into context, module, surface, outcome, type, priority, and observable acceptance criteria. Use only details the user supplied or clearly implied.
-2. Call `find_duplicate_candidates` when the request may overlap existing work. `create_standard_work_item` also stops exact and high-similarity duplicates unless the user deliberately allows one.
-3. Call `create_standard_work_item` for new work. Set `allow_create_module` only when the user explicitly asks for a new module.
-4. Call `update_standard_work_item` for a specific existing item. It preserves labels and descriptions unless a structured replacement is requested.
-5. Use optional assignees, state, estimate, dates, and cycle only when the user has supplied a selection. Never invent a release association; the diagnostic reports whether Plane supports it.
+1. Turn the request into context, module, surface, outcome, explicit scope, type, priority, and observable acceptance criteria. Use only details the user supplied or clearly implied.
+2. Judge complexity as `tiny`, `small`, `medium`, or `large` from breadth, risk, dependencies, uncertainty, and verification effort. This is a planning judgment, not a claim about elapsed time.
+3. Call `find_duplicate_candidates` when the request may overlap existing work. `create_standard_work_item` also stops exact and high-similarity duplicates unless the user deliberately allows one.
+4. Call `create_standard_work_item` for new work. In strict mode the server requires scope, complexity, assignment, an estimate mapping, planned dates, and an unstarted state. Profile defaults are policy, not invented values.
+5. Call `start_standard_work_item` when implementation begins. Preview first, then apply it so the actual start date and started state are recorded.
+6. Call `update_standard_work_item` for non-completion changes to a specific item. It preserves labels and descriptions and rejects direct transitions to a completed state.
+7. Never invent a release association; the diagnostic reports whether Plane supports it.
+
+## Complete Work
+
+1. Use `complete_standard_work_item` for every transition to Done. Do not use the generic update tool.
+2. Supply a concise factual summary and at least one verification step that was actually performed. Include implementation notes and follow-ups only when they are real.
+3. Supply `actual_minutes` only when actual active time is known. Never copy the estimate into actual time and never delay a completed task to make its timeline look human.
+4. Preview the exact completion comment and state transition before applying them. The server records the comment and optional worklog before moving the item to Done.
+5. If the result is `completion_pending`, report the failed stage and retry the same completion safely after the underlying API problem is resolved.
 
 ## Evidence
 
@@ -46,4 +56,5 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 - Prefer the active project rather than supplying `project_id` for mutations. The plugin rejects a conflicting project ID and checks that a referenced work item belongs to the selected project.
 - Treat `Bug` and `Improvement` as type labels, not title prefixes or redundant description text.
 - Preserve useful labels, descriptions, assignees, dates, and relationships when updating existing work.
+- Do not fabricate elapsed time, testing, implementation difficulty, collaboration, or human activity. Natural wording must remain factual.
 - Do not treat title similarity or audit advice as proof. Ask when a decision materially changes the work item.
