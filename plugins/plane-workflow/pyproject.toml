@@ -1,7 +1,7 @@
 [project]
 name = "plane-workflow-mcp"
-version = "0.3.1"
-description = "Configurable Plane work-item workflow MCP server"
+version = "0.4.0"
+description = "Configurable Plane planning and work-item lifecycle MCP server"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Plane Workflow Contributors" }]
@@ -19,10 +19,12 @@ classifiers = [
 dependencies = [
   "fastmcp>=3.2.0,<4",
   "keyring>=25.0,<26",
+  "pydantic>=2.11,<3",
   "pypdf>=6.15.0",
   "python-docx>=1.2.0",
   "reportlab>=5.0.0",
   "requests>=2.31,<3",
+  "tzdata>=2025.2; platform_system == 'Windows'",
 ]
 
 [project.urls]

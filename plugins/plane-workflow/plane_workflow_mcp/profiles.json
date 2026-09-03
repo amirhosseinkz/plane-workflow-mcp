@@ -10,11 +10,43 @@
     "default_priority": "medium",
     "type_labels": {
       "bug": "Bug",
-      "improvement": "Improvement"
+      "improvement": "Improvement",
+      "task": "Task"
     },
     "type_label_colors": {
       "bug": "#E5484D",
-      "improvement": "#3B82F6"
+      "improvement": "#3B82F6",
+      "task": "#6B7280"
+    },
+    "planning": {
+      "mode": "advisory",
+      "default_labels": [],
+      "timezone": "UTC",
+      "business_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday"
+      ],
+      "complexity": {
+        "tiny": {
+          "estimate": null,
+          "lead_business_days": 1
+        },
+        "small": {
+          "estimate": null,
+          "lead_business_days": 2
+        },
+        "medium": {
+          "estimate": null,
+          "lead_business_days": 4
+        },
+        "large": {
+          "estimate": null,
+          "lead_business_days": 7
+        }
+      }
     }
   },
   "profiles": []

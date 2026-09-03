@@ -5,6 +5,42 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-03
+
+### Added
+
+- Advisory and strict project planning profiles with `tiny`, `small`,
+  `medium`, and `large` complexity policies.
+- Configurable default assignee, labels, unstarted/started/completed states,
+  timezone, business days, and complexity-to-estimate-point mappings.
+- Business-day planning of start and target dates when complexity is supplied.
+- Numeric estimate mappings for self-hosted Plane versions that do not expose
+  the estimate-point catalog endpoint.
+- Preview-first `start_standard_work_item` and
+  `complete_standard_work_item` lifecycle tools.
+- Factual completion comments and optional `actual_minutes` Plane worklogs.
+
+### Changed
+
+- Standard creation now applies configured planning defaults and, in strict
+  mode, requires scope, complexity, assignment, an estimate mapping, dates, and
+  an unstarted state.
+- Ordinary task creation now applies the default `Task` type label in addition
+  to the existing Bug and Improvement type labels.
+- Standard updates no longer permit direct transitions to completed states;
+  completion goes through the dedicated lifecycle operation.
+- Plugin metadata, prompts, and documentation now describe planning, starting,
+  completion, and practical v0.3.x-v0.4.0 verification.
+
+### Safety
+
+- Start and completion mutations support previews, validate state types, and
+  retain active-project and wrong-project protections.
+- Completion records are written before the completed-state transition and can
+  be retried without duplicating matching comments or worklogs.
+- Completion guidance forbids fabricated verification or timing, copying an
+  estimate into actual time, and delaying completion to imitate human activity.
+
 ## [0.3.1] - 2026-08-19
 
 ### Changed

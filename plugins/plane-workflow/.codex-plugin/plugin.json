@@ -1,26 +1,31 @@
 {
   "name": "plane-workflow",
-  "version": "0.3.1+codex.20260819010000",
-  "description": "Configurable Plane work-item workflows and report exports for Codex.",
+  "version": "0.4.0+codex.20260903010000",
+  "description": "Configurable Plane planning, work-item lifecycles, and report exports for Codex.",
   "author": {
     "name": "Plane Workflow Contributors"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Plane Workflow",
-    "shortDescription": "Securely set up, manage, and report on Plane work.",
-    "longDescription": "Set up a secure Plane connection, then create, update, audit, organize, and export work-item reports through configurable project profiles.",
+    "shortDescription": "Plan, start, complete, and report on Plane work safely.",
+    "longDescription": "Set up a secure Plane connection, then plan, create, start, complete, audit, organize, and export work through configurable advisory or strict project profiles.",
     "developerName": "Plane Workflow Contributors",
     "category": "Productivity",
     "capabilities": [
       "MCP",
       "Write",
+      "Planning",
+      "Lifecycle",
       "Reports"
     ],
     "defaultPrompt": [
       "Set up Plane Workflow securely in this client.",
-      "Export this project's backlog and in-progress items as a PDF.",
-      "Create a well-structured Plane task from this request."
+      "Configure strict planning defaults for this project using its available Plane IDs.",
+      "Create a well-planned Plane task from this request.",
+      "Start this planned Plane item now and record its actual start date.",
+      "Complete this started Plane item with a factual summary and verification.",
+      "Export this project's backlog and in-progress items as a PDF."
     ]
   },
   "mcpServers": "./.mcp.json"

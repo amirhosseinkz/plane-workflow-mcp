@@ -16,12 +16,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastmcp import FastMCP
+from pydantic import Field
 
 from configuration import (
     ConfigurationError,
@@ -39,6 +41,10 @@ USER_PROFILES = Path.home() / ".codex" / "plane-workflow" / "profiles.json"
 DEFAULT_PLAN_DIR = Path.home() / ".codex" / "plane-workflow" / "plans"
 VALID_PRIORITIES = {"urgent", "high", "medium", "low", "none"}
 VALID_TYPES = {"bug", "improvement", "task"}
+VALID_COMPLEXITIES = {"tiny", "small", "medium", "large"}
+WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
+NonNegativeInt = Annotated[int, Field(ge=0)]
+PositiveInt = Annotated[int, Field(ge=1)]
 
 
 class PlaneWorkflowError(RuntimeError):
@@ -126,6 +132,15 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _today(timezone_name: str | None = None) -> date:
+    if not timezone_name:
+        return _utc_now().date()
+    try:
+        return datetime.now(ZoneInfo(timezone_name)).date()
+    except ZoneInfoNotFoundError as error:
+        raise PlaneWorkflowError("planning.timezone must be a valid IANA timezone name.") from error
+
+
 def _plan_expired(plan: dict[str, Any]) -> bool:
     expires_at = plan.get("expires_at")
     if not isinstance(expires_at, str):
@@ -171,6 +186,63 @@ def _validate_profile(profile: dict[str, Any]) -> list[str]:
         not isinstance(stale_after_days, int) or isinstance(stale_after_days, bool) or stale_after_days < 1
     ):
         errors.append("stale_after_days must be a positive whole number.")
+    planning = profile.get("planning")
+    if planning is not None:
+        if not isinstance(planning, dict):
+            errors.append("planning must be an object.")
+        else:
+            mode = planning.get("mode")
+            if mode is not None and mode not in {"advisory", "strict"}:
+                errors.append("planning.mode must be advisory or strict.")
+            for key in ("default_assignee_id", "default_unstarted_state_id", "default_started_state_id", "default_completed_state_id"):
+                value = planning.get(key)
+                if value is not None and (not isinstance(value, str) or not _text(value)):
+                    errors.append(f"planning.{key} must be a nonempty string.")
+            timezone_name = planning.get("timezone")
+            if timezone_name is not None:
+                if not isinstance(timezone_name, str) or not _text(timezone_name):
+                    errors.append("planning.timezone must be a nonempty IANA timezone name.")
+                else:
+                    try:
+                        ZoneInfo(_text(timezone_name))
+                    except ZoneInfoNotFoundError:
+                        errors.append("planning.timezone must be a valid IANA timezone name.")
+            default_labels = planning.get("default_labels")
+            if default_labels is not None and (
+                not isinstance(default_labels, list)
+                or not all(isinstance(value, str) and _text(value) for value in default_labels)
+            ):
+                errors.append("planning.default_labels must be a list of nonempty label names.")
+            business_days = planning.get("business_days")
+            if business_days is not None and (
+                not isinstance(business_days, list)
+                or not business_days
+                or not all(isinstance(value, str) and value.casefold() in WEEKDAYS for value in business_days)
+            ):
+                errors.append("planning.business_days must be a nonempty list of weekday names.")
+            complexity = planning.get("complexity")
+            if complexity is not None:
+                if not isinstance(complexity, dict):
+                    errors.append("planning.complexity must be an object.")
+                else:
+                    unknown = set(complexity) - VALID_COMPLEXITIES
+                    if unknown:
+                        errors.append(f"planning.complexity uses unsupported levels: {', '.join(sorted(unknown))}.")
+                    for level, rule in complexity.items():
+                        if not isinstance(rule, dict):
+                            errors.append(f"planning.complexity.{level} must be an object.")
+                            continue
+                        lead_days = rule.get("lead_business_days")
+                        if not isinstance(lead_days, int) or isinstance(lead_days, bool) or lead_days < 1:
+                            errors.append(f"planning.complexity.{level}.lead_business_days must be a positive whole number.")
+                        estimate = rule.get("estimate")
+                        valid_estimate = (
+                            isinstance(estimate, str) and bool(_text(estimate))
+                        ) or (
+                            isinstance(estimate, int) and not isinstance(estimate, bool) and estimate >= 0
+                        )
+                        if estimate is not None and not valid_estimate:
+                            errors.append(f"planning.complexity.{level}.estimate must be a non-negative point value, Plane estimate-point ID, or null.")
     return errors
 
 
@@ -254,12 +326,18 @@ class PlaneApi:
     ) -> Any:
         normalized_path = path.strip("/")
         url = f"{self.base_url}/api/v1/workspaces/{self.workspace}/{normalized_path}/"
-        response = self.session.request(method, url, params=params, json=payload, timeout=30)
+        try:
+            response = self.session.request(method, url, params=params, json=payload, timeout=30)
+        except requests.RequestException as error:
+            raise PlaneWorkflowError("Plane API request failed before a response was received.") from error
         if not response.ok:
             raise PlaneWorkflowError(f"Plane API request failed with HTTP {response.status_code}.")
         if not response.content:
             return None
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as error:
+            raise PlaneWorkflowError("Plane API returned an invalid JSON response.") from error
 
     def project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"projects/{project_id}")
@@ -284,6 +362,19 @@ class PlaneApi:
 
     def labels(self, project_id: str) -> list[dict[str, Any]]:
         return _results(self.request("GET", f"projects/{project_id}/labels", params={"per_page": 1000}))
+
+    def estimate(self, project_id: str) -> dict[str, Any] | None:
+        payload = self.request("GET", f"projects/{project_id}/estimates")
+        return payload if isinstance(payload, dict) and payload.get("id") else None
+
+    def estimate_points(self, project_id: str, estimate_id: str) -> list[dict[str, Any]]:
+        return _results(
+            self.request(
+                "GET",
+                f"projects/{project_id}/estimates/{estimate_id}/estimate-points",
+                params={"per_page": 1000},
+            )
+        )
 
     def work_items(self, project_id: str) -> tuple[list[dict[str, Any]], int | None]:
         """Return every work item, including projects with more than one API page."""
@@ -373,6 +464,40 @@ class PlaneApi:
 
     def update_work_item(self, project_id: str, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("PATCH", f"projects/{project_id}/work-items/{work_item_id}", payload=payload)
+
+    def work_item_comments(self, project_id: str, work_item_id: str) -> list[dict[str, Any]]:
+        comments: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"per_page": 100}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self.request(
+                "GET",
+                f"projects/{project_id}/work-items/{work_item_id}/comments",
+                params=params,
+            )
+            comments.extend(_results(payload))
+            next_cursor = payload.get("next_cursor") if isinstance(payload, dict) else None
+            has_next = bool(payload.get("next_page_results")) if isinstance(payload, dict) else False
+            if not has_next or not isinstance(next_cursor, str) or not next_cursor:
+                return comments
+            cursor = next_cursor
+
+    def create_work_item_comment(self, project_id: str, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", f"projects/{project_id}/work-items/{work_item_id}/comments", payload=payload)
+
+    def create_worklog(self, project_id: str, work_item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", f"projects/{project_id}/work-items/{work_item_id}/worklogs", payload=payload)
+
+    def worklogs(self, project_id: str, work_item_id: str) -> list[dict[str, Any]]:
+        return _results(
+            self.request(
+                "GET",
+                f"projects/{project_id}/work-items/{work_item_id}/worklogs",
+                params={"per_page": 1000},
+            )
+        )
 
     def create_label(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", f"projects/{project_id}/labels", payload=payload)
@@ -575,7 +700,7 @@ def _ensure_label(
 
 
 def _ensure_type_label(api: PlaneApi, project_id: str, labels: list[dict[str, Any]], profile: dict[str, Any], work_item_type: str) -> dict[str, Any] | None:
-    if work_item_type == "task":
+    if work_item_type not in profile.get("type_labels", {}):
         return None
     label_name = profile.get("type_labels", {}).get(work_item_type, work_item_type.title())
     color_value = profile.get("type_label_colors", {}).get(work_item_type)
@@ -785,7 +910,7 @@ def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in profile.items()
-        if key in {"match", "title_template", "default_priority", "type_labels", "type_label_colors", "language", "stale_after_days"}
+        if key in {"match", "title_template", "default_priority", "type_labels", "type_label_colors", "language", "stale_after_days", "planning"}
     }
 
 
@@ -833,6 +958,130 @@ def _optional_options(loader: Any, *, member: bool = False) -> tuple[list[dict[s
     return [_workflow_option_view(item, member=member) for item in items], {"available": True}
 
 
+def _estimate_options(api: PlaneApi, project_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    try:
+        estimate = api.estimate(project_id)
+        if not estimate:
+            return [], {"available": True, "count": 0}
+        points: list[dict[str, Any]] = []
+        estimate_id = _option_id(estimate)
+        if not estimate_id:
+            return [], {"available": True, "count": 0}
+        for point in api.estimate_points(project_id, estimate_id):
+            point_id = _option_id(point)
+            if point_id:
+                points.append(
+                    {
+                        "id": point_id,
+                        "estimate_id": estimate_id,
+                        "estimate_name": estimate.get("name"),
+                        "key": point.get("key"),
+                        "value": point.get("value"),
+                        "description": point.get("description"),
+                    }
+                )
+        return points, {"available": True, "count": len(points)}
+    except PlaneWorkflowError:
+        return [], {"available": False}
+
+
+def _planning_policy(profile: dict[str, Any]) -> dict[str, Any]:
+    planning = profile.get("planning", {})
+    return planning if isinstance(planning, dict) else {}
+
+
+def _business_weekdays(planning: dict[str, Any]) -> set[int]:
+    configured = planning.get("business_days", ["monday", "tuesday", "wednesday", "thursday", "friday"])
+    return {WEEKDAYS[str(value).casefold()] for value in configured}
+
+
+def _next_business_day(value: date, weekdays: set[int]) -> date:
+    candidate = value
+    while candidate.weekday() not in weekdays:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _add_business_days(value: date, days: int, weekdays: set[int]) -> date:
+    candidate = _next_business_day(value, weekdays)
+    remaining = max(days - 1, 0)
+    while remaining:
+        candidate += timedelta(days=1)
+        if candidate.weekday() in weekdays:
+            remaining -= 1
+    return candidate
+
+
+def _state_type(states: list[dict[str, Any]], state_id: str | None) -> str | None:
+    if not state_id:
+        return None
+    state = next((item for item in states if _option_id(item) == state_id), None)
+    return _text(str((state or {}).get("type") or (state or {}).get("group") or "")).casefold() or None
+
+
+def _resolve_creation_plan(
+    profile: dict[str, Any],
+    *,
+    complexity: str | None,
+    scope: str | None,
+    assignee_ids: list[str] | None,
+    state_id: str | None,
+    estimate: int | str | None,
+    start_date: str | None,
+    target_date: str | None,
+) -> dict[str, Any]:
+    planning = _planning_policy(profile)
+    mode = planning.get("mode", "advisory")
+    selected_complexity = _text(complexity).casefold() or None
+    if selected_complexity and selected_complexity not in VALID_COMPLEXITIES:
+        raise PlaneWorkflowError("complexity must be tiny, small, medium, or large.")
+    rule = planning.get("complexity", {}).get(selected_complexity, {}) if selected_complexity else {}
+    selected_assignees = assignee_ids
+    if selected_assignees is None and _text(planning.get("default_assignee_id")):
+        selected_assignees = [_text(planning["default_assignee_id"])]
+    selected_state = state_id or (_text(planning.get("default_unstarted_state_id")) or None)
+    selected_estimate = estimate if estimate is not None else rule.get("estimate")
+    selected_start = start_date
+    selected_target = target_date
+    if selected_complexity and (not selected_start or not selected_target):
+        weekdays = _business_weekdays(planning)
+        planned_start = date.fromisoformat(selected_start) if selected_start else _next_business_day(_today(planning.get("timezone")), weekdays)
+        if not selected_start:
+            selected_start = planned_start.isoformat()
+        lead_days = rule.get("lead_business_days")
+        if isinstance(lead_days, int) and not isinstance(lead_days, bool) and lead_days > 0 and not selected_target:
+            selected_target = _add_business_days(planned_start, lead_days, weekdays).isoformat()
+
+    missing: list[str] = []
+    if mode == "strict":
+        if not _text(scope):
+            missing.append("scope")
+        if not selected_complexity:
+            missing.append("complexity")
+        if not selected_assignees:
+            missing.append("assignee")
+        if not selected_state:
+            missing.append("unstarted state")
+        if selected_estimate is None:
+            missing.append("estimate mapping")
+        if not selected_start or not selected_target:
+            missing.append("planned dates")
+    if missing:
+        raise PlaneWorkflowError(
+            "Strict planning requires " + ", ".join(missing) + ". Configure the project planning profile or provide explicit values."
+        )
+    return {
+        "mode": mode,
+        "complexity": selected_complexity,
+        "assignee_ids": selected_assignees,
+        "state_id": selected_state,
+        "estimate": selected_estimate,
+        "start_date": selected_start,
+        "target_date": selected_target,
+        "lead_business_days": rule.get("lead_business_days") if isinstance(rule, dict) else None,
+    }
+
+
 def _validate_date(value: str | None, field_name: str) -> str | None:
     if value is None:
         return None
@@ -856,6 +1105,27 @@ def _validate_estimate(value: int | str | None) -> int | str | None:
     if isinstance(value, str) and _text(value):
         return _text(value)
     raise PlaneWorkflowError("estimate must be a non-negative number or a configured estimate value.")
+
+
+def _resolve_estimate_selection(api: PlaneApi, project_id: str, estimate: int | str | None, *, required: bool) -> int | str | None:
+    if estimate is None:
+        return None
+    points, capability = _estimate_options(api, project_id)
+    if not capability["available"]:
+        if required and not isinstance(estimate, int):
+            raise PlaneWorkflowError("Strict planning could not read this project's estimate points.")
+        return estimate
+    direct = next((point for point in points if estimate == point["id"]), None)
+    if direct:
+        return str(direct["id"])
+    matching = [
+        point
+        for point in points
+        if str(estimate) in {str(point.get("key")), str(point.get("value"))}
+    ]
+    if len(matching) == 1:
+        return str(matching[0]["id"])
+    raise PlaneWorkflowError("estimate must identify one estimate point returned by get_workflow_options.")
 
 
 def _validate_id_list(values: list[str] | None, field_name: str) -> list[str] | None:
@@ -916,6 +1186,79 @@ def _workflow_field_payload(
     if target_date is not None:
         payload["target_date"] = target_date
     return payload
+
+
+def _validate_date_range(start_date: str | None, target_date: str | None) -> None:
+    if start_date and target_date and date.fromisoformat(target_date) < date.fromisoformat(start_date):
+        raise PlaneWorkflowError("target_date cannot be earlier than start_date.")
+
+
+def _normalize_text_list(values: list[str] | None, field_name: str, *, required: bool = False) -> list[str]:
+    normalized = [_text(value) for value in values or [] if isinstance(value, str) and _text(value)]
+    normalized = list(dict.fromkeys(normalized))
+    if required and not normalized:
+        raise PlaneWorkflowError(f"{field_name} requires at least one nonempty entry.")
+    if values is not None and len(normalized) != len(values):
+        raise PlaneWorkflowError(f"{field_name} must contain unique, nonempty strings.")
+    return normalized
+
+
+def _completion_external_id(
+    work_item_id: str,
+    summary: str,
+    verification: list[str],
+    implementation_notes: list[str],
+    follow_ups: list[str],
+    actual_minutes: int | None,
+    state_id: str,
+) -> str:
+    content = json.dumps(
+        {
+            "work_item_id": work_item_id,
+            "summary": summary,
+            "verification": verification,
+            "implementation_notes": implementation_notes,
+            "follow_ups": follow_ups,
+            "actual_minutes": actual_minutes,
+            "state_id": state_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _render_completion_comment(
+    *,
+    summary: str,
+    verification: list[str],
+    implementation_notes: list[str],
+    follow_ups: list[str],
+    estimate: Any,
+    actual_minutes: int | None,
+) -> str:
+    body = [f"<p>Wrapped this up. {html.escape(summary)}</p>"]
+    if implementation_notes:
+        body.append("<p><strong>What it took</strong></p><ul>")
+        body.extend(f"<li>{html.escape(item)}</li>" for item in implementation_notes)
+        body.append("</ul>")
+    body.append("<p><strong>Verification</strong></p><ul>")
+    body.extend(f"<li>{html.escape(item)}</li>" for item in verification)
+    body.append("</ul>")
+    if follow_ups:
+        body.append("<p><strong>Notes and follow-ups</strong></p><ul>")
+        body.extend(f"<li>{html.escape(item)}</li>" for item in follow_ups)
+        body.append("</ul>")
+    timing: list[str] = []
+    if estimate is not None and estimate != "":
+        timing.append(f"Estimate: {html.escape(str(estimate))}")
+    if actual_minutes is not None:
+        hours, minutes = divmod(actual_minutes, 60)
+        duration = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+        timing.append(f"Actual active time: {duration}")
+    if timing:
+        body.append(f"<p>{'<br>'.join(timing)}</p>")
+    return "".join(body)
 
 
 def _normalize_evidence_links(evidence: list[dict[str, str]]) -> list[dict[str, str | None]]:
@@ -1082,6 +1425,7 @@ mcp = FastMCP(
         "For a new installation, call get_plane_workflow_setup_status first and run plane-workflow setup "
         "when it reports needs_setup. Before writes, call get_active_plane_context and select the intended "
         "workspace and project when needed. Use get_project_workflow_context before writes and audit_work_items before bulk changes."
+        " Plan new work with scope and complexity, start it explicitly, and use complete_standard_work_item for every Done transition."
     ),
 )
 
@@ -1233,7 +1577,7 @@ def get_project_workflow_context(project_id: str | None = None) -> dict[str, Any
     return {
         "project": {"id": project.get("id"), "identifier": project.get("identifier"), "name": project.get("name")},
         "workspace": api.workspace,
-        "profile": {"title_template": profile.get("title_template"), "default_priority": profile.get("default_priority"), "language": profile.get("language")},
+        "profile": {"title_template": profile.get("title_template"), "default_priority": profile.get("default_priority"), "language": profile.get("language"), "planning": profile.get("planning")},
         "modules": [{"id": item.get("id"), "name": item.get("name"), "description": item.get("description")} for item in api.modules(project_id)],
         "labels": [{"id": item.get("id"), "name": item.get("name")} for item in api.labels(project_id)],
         "work_item_count": total_count if total_count is not None else len(work_items),
@@ -1258,13 +1602,14 @@ def get_project_workflow_profile(project_id: str | None = None) -> dict[str, Any
 
 @mcp.tool()
 def get_workflow_options(project_id: str | None = None) -> dict[str, Any]:
-    """List the available state, cycle, and assignee choices for a project without changing Plane."""
+    """List the available state, cycle, assignee, and estimate choices for a project without changing Plane."""
     api = PlaneApi(_find_plane_settings())
     project_id = _project_id(api, project_id)
     project = api.project(project_id)
     states, state_capability = _optional_options(lambda: api.states(project_id))
     cycles, cycle_capability = _optional_options(lambda: api.cycles(project_id))
     members, member_capability = _optional_options(lambda: api.members(project_id), member=True)
+    estimate_points, estimate_capability = _estimate_options(api, project_id)
     releases, release_capability = _optional_options(api.releases)
     return {
         "status": "options",
@@ -1272,17 +1617,18 @@ def get_workflow_options(project_id: str | None = None) -> dict[str, Any]:
         "states": states,
         "cycles": cycles,
         "assignees": members,
+        "estimate_points": estimate_points,
         "releases": releases,
         "capabilities": {
             "state": state_capability,
             "cycle_assignment": cycle_capability,
             "assignee": member_capability,
-            "estimate": {"available": True},
+            "estimate": estimate_capability,
             "dates": {"available": True},
             "release_assignment": {"available": False, "reason": "This Plane API does not expose a work-item release relationship."},
             "release_catalog": release_capability,
         },
-        "note": "Use these IDs when creating or updating a work item. Release assignment is reported separately because it is not available through this Plane API.",
+        "note": "Use these IDs when creating or updating a work item. When estimate points are unavailable, a self-hosted project profile may use numeric point mappings.",
     }
 
 
@@ -1327,6 +1673,7 @@ def diagnose_plane_connection(project_id: str | None = None) -> dict[str, Any]:
             "states": _connection_probe(lambda: api.states(project_id)),
             "cycles": _connection_probe(lambda: api.cycles(project_id)),
             "members": _connection_probe(lambda: api.members(project_id)),
+            "estimates": _connection_probe(lambda: api.estimate(project_id)),
             "releases": _connection_probe(api.releases),
         }
     )
@@ -1725,14 +2072,15 @@ def upload_work_item_attachment(
 
 @mcp.tool()
 def create_standard_work_item(
+    outcome: str,
+    acceptance_criteria: list[str],
     project_id: str | None = None,
-    outcome: str = "",
-    acceptance_criteria: list[str] | None = None,
     work_item_type: Literal["bug", "improvement", "task"] = "task",
     context: str | None = None,
     module_name: str | None = None,
     surface: str | None = None,
     scope: str | None = None,
+    complexity: Literal["tiny", "small", "medium", "large"] | None = None,
     priority: Literal["urgent", "high", "medium", "low", "none"] | None = None,
     current_behavior: str | None = None,
     expected_behavior: str | None = None,
@@ -1743,7 +2091,7 @@ def create_standard_work_item(
     allow_duplicate: bool = False,
     assignee_ids: list[str] | None = None,
     state_id: str | None = None,
-    estimate: int | str | None = None,
+    estimate: NonNegativeInt | str | None = None,
     start_date: str | None = None,
     target_date: str | None = None,
     cycle_id: str | None = None,
@@ -1757,16 +2105,27 @@ def create_standard_work_item(
         raise PlaneWorkflowError("acceptance_criteria is required.")
     if work_item_type not in VALID_TYPES:
         raise PlaneWorkflowError("work_item_type must be bug, improvement, or task.")
-    selected_assignees = _validate_id_list(assignee_ids, "assignee_ids")
-    selected_state = _text(state_id) or None
     selected_cycle = _text(cycle_id) or None
     selected_release = _text(release_id) or None
-    selected_estimate = _validate_estimate(estimate)
-    selected_start_date = _validate_date(start_date, "start_date")
-    selected_target_date = _validate_date(target_date, "target_date")
     api = PlaneApi(_find_plane_settings())
     project_id = _project_id(api, project_id, enforce_active=True)
     profile, _ = _resolve_profile(api, project_id)
+    plan = _resolve_creation_plan(
+        profile,
+        complexity=complexity,
+        scope=scope,
+        assignee_ids=_validate_id_list(assignee_ids, "assignee_ids"),
+        state_id=_text(state_id) or None,
+        estimate=_validate_estimate(estimate),
+        start_date=_validate_date(start_date, "start_date"),
+        target_date=_validate_date(target_date, "target_date"),
+    )
+    selected_assignees = _validate_id_list(plan["assignee_ids"], "assignee_ids")
+    selected_state = plan["state_id"]
+    selected_estimate = _validate_estimate(plan["estimate"])
+    selected_start_date = _validate_date(plan["start_date"], "start_date")
+    selected_target_date = _validate_date(plan["target_date"], "target_date")
+    _validate_date_range(selected_start_date, selected_target_date)
     _validate_workflow_selection(
         api,
         project_id,
@@ -1774,6 +2133,18 @@ def create_standard_work_item(
         state_id=selected_state,
         cycle_id=selected_cycle,
         release_id=selected_release,
+    )
+    states = api.states(project_id) if selected_state else []
+    selected_state_type = _state_type(states, selected_state)
+    if selected_state_type in {"completed", "cancelled"}:
+        raise PlaneWorkflowError("New work items must start in a backlog or unstarted state.")
+    if plan["mode"] == "strict" and selected_state_type not in {"backlog", "unstarted"}:
+        raise PlaneWorkflowError("Strict planning requires default_unstarted_state_id to reference a backlog or unstarted state.")
+    selected_estimate = _resolve_estimate_selection(
+        api,
+        project_id,
+        selected_estimate,
+        required=plan["mode"] == "strict",
     )
     title = _build_title(profile, context=context, module=module_name, surface=surface, outcome=outcome, title_parts=title_parts)
     work_items, _ = api.work_items(project_id)
@@ -1794,7 +2165,12 @@ def create_standard_work_item(
         raise PlaneWorkflowError("priority must be urgent, high, medium, low, or none.")
     labels = api.labels(project_id)
     by_name = {_text(str(label.get("name", ""))).casefold(): label for label in labels}
-    requested_labels = [_text(name) for name in additional_labels or [] if _text(name)]
+    default_labels = _planning_policy(profile).get("default_labels", [])
+    requested_labels = list(
+        dict.fromkeys(
+            [_text(name) for name in [*default_labels, *(additional_labels or [])] if _text(name)]
+        )
+    )
     missing_labels = [name for name in requested_labels if name.casefold() not in by_name]
     if missing_labels:
         raise PlaneWorkflowError(f"Requested labels do not exist: {', '.join(missing_labels)}.")
@@ -1814,6 +2190,9 @@ def create_standard_work_item(
         target_date=selected_target_date,
     )
     workflow_summary = {
+        "planning_mode": plan["mode"],
+        "complexity": plan["complexity"],
+        "lead_business_days": plan["lead_business_days"],
         "assignee_ids": selected_assignees or [],
         "state_id": selected_state,
         "estimate": selected_estimate,
@@ -1827,7 +2206,7 @@ def create_standard_work_item(
             "priority": selected_priority,
             "module": module_name,
             "type": work_item_type,
-            "labels": requested_labels + ([profile.get("type_labels", {}).get(work_item_type, work_item_type.title())] if work_item_type != "task" else []),
+            "labels": requested_labels + ([profile.get("type_labels", {}).get(work_item_type, work_item_type.title())] if work_item_type in profile.get("type_labels", {}) else []),
             "description_html": description_html,
             "workflow": workflow_summary,
         }
@@ -1857,9 +2236,199 @@ def create_standard_work_item(
 
 
 @mcp.tool()
-def update_standard_work_item(
+def start_standard_work_item(
+    work_item_id: str,
     project_id: str | None = None,
-    work_item_id: str = "",
+    state_id: str | None = None,
+    start_date: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Preview or start planned work using the project's configured started state and the actual start date."""
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
+    profile, _ = _resolve_profile(api, project_id)
+    planning = _planning_policy(profile)
+    selected_state = _text(state_id) or _text(planning.get("default_started_state_id"))
+    if not selected_state:
+        raise PlaneWorkflowError("Provide state_id or configure planning.default_started_state_id.")
+    states = api.states(project_id)
+    if _state_type(states, selected_state) != "started":
+        raise PlaneWorkflowError("The start state must reference a Plane state with type started.")
+    existing = _work_item_for_project(api, project_id, work_item_id)
+    current_type = _state_type(states, _item_state_id(existing))
+    if current_type in {"completed", "cancelled"}:
+        raise PlaneWorkflowError("Completed or cancelled work cannot be started.")
+    explicit_start = _validate_date(start_date, "start_date")
+    if current_type == "started" and explicit_start is None:
+        return {
+            "status": "already_started",
+            "work_item": _work_item_summary(existing),
+            "workflow": {"state": _item_state_id(existing), "start_date": existing.get("start_date")},
+        }
+    selected_start = explicit_start or _today(planning.get("timezone")).isoformat()
+    payload = {"state": selected_state, "start_date": selected_start}
+    if dry_run:
+        return {
+            "status": "preview",
+            "work_item": _work_item_summary(existing),
+            "changes": payload,
+            "note": "No Plane data was changed. Set dry_run=false to start the work item.",
+        }
+    if current_type == "started" and _item_state_id(existing) == selected_state and existing.get("start_date") == selected_start:
+        return {"status": "already_started", "work_item": _work_item_summary(existing), "workflow": payload}
+    updated = api.update_work_item(project_id, work_item_id, payload)
+    return {"status": "started", "work_item": _work_item_summary(updated), "workflow": payload}
+
+
+@mcp.tool()
+def complete_standard_work_item(
+    work_item_id: str,
+    summary: str,
+    verification: list[str],
+    project_id: str | None = None,
+    implementation_notes: list[str] | None = None,
+    follow_ups: list[str] | None = None,
+    actual_minutes: PositiveInt | None = None,
+    state_id: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Preview or complete started work after recording a factual, human-readable completion comment."""
+    selected_summary = _text(summary)
+    if not selected_summary:
+        raise PlaneWorkflowError("summary is required.")
+    selected_verification = _normalize_text_list(verification, "verification", required=True)
+    selected_notes = _normalize_text_list(implementation_notes, "implementation_notes")
+    selected_follow_ups = _normalize_text_list(follow_ups, "follow_ups")
+    if actual_minutes is not None and (
+        isinstance(actual_minutes, bool) or not isinstance(actual_minutes, int) or actual_minutes < 1
+    ):
+        raise PlaneWorkflowError("actual_minutes must be a positive whole number when supplied.")
+
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
+    profile, _ = _resolve_profile(api, project_id)
+    planning = _planning_policy(profile)
+    selected_state = _text(state_id) or _text(planning.get("default_completed_state_id"))
+    if not selected_state:
+        raise PlaneWorkflowError("Provide state_id or configure planning.default_completed_state_id.")
+    states = api.states(project_id)
+    if _state_type(states, selected_state) != "completed":
+        raise PlaneWorkflowError("The completion state must reference a Plane state with type completed.")
+    existing = _work_item_for_project(api, project_id, work_item_id)
+    current_type = _state_type(states, _item_state_id(existing))
+    external_id = _completion_external_id(
+        work_item_id,
+        selected_summary,
+        selected_verification,
+        selected_notes,
+        selected_follow_ups,
+        actual_minutes,
+        selected_state,
+    )
+    estimate = existing.get("estimate_point") or existing.get("point")
+    if isinstance(estimate, dict):
+        estimate = estimate.get("value") or estimate.get("key") or estimate.get("id")
+    elif isinstance(estimate, str):
+        estimate_points, _ = _estimate_options(api, project_id)
+        point = next((item for item in estimate_points if item.get("id") == estimate), None)
+        estimate = (point or {}).get("value") or (point or {}).get("key")
+    comment_html = _render_completion_comment(
+        summary=selected_summary,
+        verification=selected_verification,
+        implementation_notes=selected_notes,
+        follow_ups=selected_follow_ups,
+        estimate=estimate,
+        actual_minutes=actual_minutes,
+    )
+    preview = {
+        "work_item": _work_item_summary(existing),
+        "state_id": selected_state,
+        "comment_html": comment_html,
+        "actual_minutes": actual_minutes,
+    }
+    if dry_run:
+        return {
+            "status": "preview",
+            "completion": preview,
+            "note": "No Plane data was changed. The comment will be recorded before the item is moved to Done.",
+        }
+
+    try:
+        comments = api.work_item_comments(project_id, work_item_id)
+    except PlaneWorkflowError as error:
+        return {"status": "completion_pending", "stage": "comment_lookup", "reason": str(error), "completion": preview}
+    matching_comment = next((comment for comment in comments if comment.get("external_id") == external_id), None)
+    if current_type == "completed":
+        if matching_comment:
+            return {"status": "already_completed", "completion": preview, "comment_id": matching_comment.get("id")}
+        raise PlaneWorkflowError("This work item is already completed without this completion record; no comment was added.")
+    if current_type != "started":
+        raise PlaneWorkflowError("Start the work item before completing it.")
+
+    comment = matching_comment
+    if comment is None:
+        try:
+            comment = api.create_work_item_comment(
+                project_id,
+                work_item_id,
+                {
+                    "comment_html": comment_html,
+                    "access": "INTERNAL",
+                    "external_source": "plane-workflow-mcp",
+                    "external_id": external_id,
+                },
+            )
+        except PlaneWorkflowError as error:
+            return {"status": "completion_pending", "stage": "comment", "reason": str(error), "completion": preview}
+
+    worklog: dict[str, Any] | None = None
+    if actual_minutes is not None:
+        worklog_marker = f"[plane-workflow:{external_id}]"
+        try:
+            existing_worklog = next(
+                (entry for entry in api.worklogs(project_id, work_item_id) if worklog_marker in str(entry.get("description", ""))),
+                None,
+            )
+            if existing_worklog:
+                worklog = existing_worklog
+            else:
+                worklog = api.create_worklog(
+                    project_id,
+                    work_item_id,
+                    {"duration": actual_minutes, "description": f"{worklog_marker} Active implementation and verification time."},
+                )
+        except PlaneWorkflowError as error:
+            return {
+                "status": "completion_pending",
+                "stage": "worklog",
+                "reason": str(error),
+                "comment_id": comment.get("id"),
+                "completion": preview,
+            }
+    try:
+        updated = api.update_work_item(project_id, work_item_id, {"state": selected_state})
+    except PlaneWorkflowError as error:
+        return {
+            "status": "completion_pending",
+            "stage": "state",
+            "reason": str(error),
+            "comment_id": comment.get("id"),
+            "worklog_id": worklog.get("id") if worklog else None,
+            "completion": preview,
+        }
+    return {
+        "status": "completed",
+        "work_item": _work_item_summary(updated),
+        "comment_id": comment.get("id"),
+        "worklog_id": worklog.get("id") if worklog else None,
+        "completion": preview,
+    }
+
+
+@mcp.tool()
+def update_standard_work_item(
+    work_item_id: str,
+    project_id: str | None = None,
     outcome: str | None = None,
     acceptance_criteria: list[str] | None = None,
     work_item_type: Literal["bug", "improvement", "task"] | None = None,
@@ -1877,7 +2446,7 @@ def update_standard_work_item(
     module_description: str | None = None,
     assignee_ids: list[str] | None = None,
     state_id: str | None = None,
-    estimate: int | str | None = None,
+    estimate: NonNegativeInt | str | None = None,
     start_date: str | None = None,
     target_date: str | None = None,
     cycle_id: str | None = None,
@@ -1894,6 +2463,7 @@ def update_standard_work_item(
     selected_estimate = _validate_estimate(estimate)
     selected_start_date = _validate_date(start_date, "start_date")
     selected_target_date = _validate_date(target_date, "target_date")
+    _validate_date_range(selected_start_date, selected_target_date)
     api = PlaneApi(_find_plane_settings())
     project_id = _project_id(api, project_id, enforce_active=True)
     profile, _ = _resolve_profile(api, project_id)
@@ -1905,6 +2475,9 @@ def update_standard_work_item(
         cycle_id=selected_cycle,
         release_id=selected_release,
     )
+    if selected_state and _state_type(api.states(project_id), selected_state) == "completed":
+        raise PlaneWorkflowError("Use complete_standard_work_item to move a work item to a completed state with completion notes.")
+    selected_estimate = _resolve_estimate_selection(api, project_id, selected_estimate, required=False)
     existing = _work_item_for_project(api, project_id, work_item_id)
     payload: dict[str, Any] = {}
     if priority:
