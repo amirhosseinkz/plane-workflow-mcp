@@ -5,6 +5,43 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-04
+
+### Added
+
+- Bounded-response `list_work_items` queries with local filters that work across Plane
+  editions.
+- Read-only `get_project_briefing` summaries for overdue, stale, unassigned,
+  unestimated, and unscheduled active work.
+- Read-only work-item relation inspection and preview-first, same-project
+  relation creation with post-write verification.
+- Preview-first `cancel_standard_work_item` lifecycle with a factual,
+  retry-safe cancellation record.
+
+### Changed
+
+- Mattermost routing can use project briefings, filtered work-item lists,
+  relations, and the cancellation lifecycle; the companion bot is versioned
+  as 0.3.0.
+- Plane API failures include a bounded, sanitized server detail when one is
+  available.
+
+### Fixed
+
+- Work-item pagination now follows Plane's cursor contract and reads
+  `total_results`, preventing repeated first-page results in projects with more
+  than 100 work items.
+- Connection diagnostics now use the selected project when no explicit project
+  ID is supplied.
+
+### Safety
+
+- Generic work-item updates can no longer bypass the dedicated cancellation
+  lifecycle.
+- Relation creation validates every target against the selected project,
+  requires review of relation direction, and reports targets Plane silently
+  omitted.
+
 ## [0.4.0] - 2026-09-03
 
 ### Added

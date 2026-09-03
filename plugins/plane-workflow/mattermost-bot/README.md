@@ -47,6 +47,12 @@ The bot listens only to direct messages when `MATTERMOST_DM_ONLY=true`. Every
 Plane-changing action is prepared as a draft; users must reply with
 `confirm <draft-id>` to apply it or `cancel <draft-id>` to discard it.
 
+The v0.5 tool catalog supports filtered work-item lists, project attention
+briefings, dependency inspection and creation, and factual cancellation in
+addition to planning, start, completion, audit, and module operations. Relation
+creation and cancellation follow the same draft-and-confirm flow as other
+writes.
+
 ## Background service
 
 `launch_agent.py` is an optional macOS convenience. It installs a local

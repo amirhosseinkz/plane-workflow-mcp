@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime, timezone
 import unittest
 from unittest.mock import patch
 
@@ -26,6 +26,7 @@ def _profile(mode: str = "strict") -> dict[str, object]:
                 "default_unstarted_state_id": "backlog-id",
                 "default_started_state_id": "started-id",
                 "default_completed_state_id": "done-id",
+                "default_cancelled_state_id": "cancelled-id",
                 "business_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
                 "complexity": {
                     "small": {"estimate": "point-id", "lead_business_days": 2},
@@ -56,6 +57,9 @@ class _Api:
         ]
         self.comments_data: list[dict[str, object]] = []
         self.worklogs_data: list[dict[str, object]] = []
+        self.relations_data: dict[str, list[dict[str, object]]] = {
+            relation_type: [] for relation_type in server.VALID_RELATION_TYPES
+        }
         self.events: list[str] = []
 
     @staticmethod
@@ -68,6 +72,7 @@ class _Api:
             {"id": "backlog-id", "name": "Backlog", "type": "backlog"},
             {"id": "started-id", "name": "In Progress", "type": "started"},
             {"id": "done-id", "name": "Done", "type": "completed"},
+            {"id": "cancelled-id", "name": "Cancelled", "type": "cancelled"},
         ]
 
     @staticmethod
@@ -93,6 +98,10 @@ class _Api:
         return self.labels_data
 
     def modules(self, project_id: str) -> list[dict[str, object]]:
+        return []
+
+    @staticmethod
+    def module_work_items(project_id: str, module_id: str) -> list[dict[str, object]]:
         return []
 
     def work_item(self, project_id: str, work_item_id: str) -> dict[str, object]:
@@ -129,6 +138,22 @@ class _Api:
         worklog = {"id": "worklog-id", **payload}
         self.worklogs_data.append(worklog)
         return worklog
+
+    def work_item_relations(self, project_id: str, work_item_id: str) -> dict[str, object]:
+        return self.relations_data
+
+    def create_work_item_relations(
+        self,
+        project_id: str,
+        work_item_id: str,
+        *,
+        relation_type: str,
+        related_work_item_ids: list[str],
+    ) -> list[dict[str, object]]:
+        self.events.append("relations")
+        created = [{"project_id": project_id, "issue_id": item_id} for item_id in related_work_item_ids]
+        self.relations_data[relation_type].extend(created)
+        return created
 
 
 class LifecycleTests(unittest.TestCase):
@@ -344,6 +369,53 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual([comment["id"] for comment in comments], ["one", "two"])
         self.assertEqual(request.call_args_list[1].kwargs["params"]["cursor"], "100:1:0")
 
+    def test_work_item_listing_follows_plane_cursors_and_total_results(self) -> None:
+        api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
+        pages = [
+            {"results": [{"id": "one"}], "total_results": 2, "next_page_results": True, "next_cursor": "100:1:0"},
+            {"results": [{"id": "two"}], "total_results": 2, "next_page_results": False, "next_cursor": None},
+        ]
+        with patch.object(api, "request", side_effect=pages) as request:
+            items, total = api.work_items(PROJECT_ID)
+
+        self.assertEqual([item["id"] for item in items], ["one", "two"])
+        self.assertEqual(total, 2)
+        self.assertNotIn("page", request.call_args_list[0].kwargs["params"])
+        self.assertEqual(request.call_args_list[1].kwargs["params"]["cursor"], "100:1:0")
+
+    def test_module_membership_listing_follows_plane_cursors(self) -> None:
+        api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
+        pages = [
+            {"results": [{"issue_id": "one"}], "next_page_results": True, "next_cursor": "100:1:0"},
+            {"results": [{"issue_id": "two"}], "next_page_results": False, "next_cursor": None},
+        ]
+        with patch.object(api, "request", side_effect=pages) as request:
+            items = api.module_work_items(PROJECT_ID, "module-id")
+
+        self.assertEqual([item["issue_id"] for item in items], ["one", "two"])
+        self.assertEqual(request.call_args_list[1].kwargs["params"]["cursor"], "100:1:0")
+
+    def test_plane_request_includes_sanitized_api_detail(self) -> None:
+        api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
+        response = requests.Response()
+        response.status_code = 400
+        response._content = b'{"detail":"Invalid state selection"}'
+        api.session.request = lambda *args, **kwargs: response  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(server.PlaneWorkflowError, "HTTP 400: Invalid state selection"):
+            api.project(PROJECT_ID)
+
+    def test_plane_request_omits_sensitive_api_detail(self) -> None:
+        api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
+        response = requests.Response()
+        response.status_code = 500
+        response._content = b'{"detail":"Traceback at https://internal.example.test with API key secret"}'
+        api.session.request = lambda *args, **kwargs: response  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(server.PlaneWorkflowError, r"HTTP 500\.$") as raised:
+            api.project(PROJECT_ID)
+        self.assertNotIn("internal.example", str(raised.exception))
+
     def test_plane_request_wraps_network_failures(self) -> None:
         api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
         api.session.request = lambda *args, **kwargs: (_ for _ in ()).throw(requests.Timeout("timed out"))  # type: ignore[method-assign]
@@ -375,6 +447,142 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(completed["status"], "completed")
         self.assertEqual(len(api.comments_data), 1)
 
+    def test_list_work_items_filters_active_overdue_items(self) -> None:
+        api = _Api()
+        api.items = [
+            {
+                "id": "overdue-id",
+                "sequence_id": 3,
+                "name": "Fix playback timeout",
+                "description_stripped": "Observable timeout repair",
+                "priority": "high",
+                "state": "started-id",
+                "assignees": [{"id": "member-id", "display_name": "Ava"}],
+                "labels": [{"id": "engineering-id", "name": "Engineering"}],
+                "target_date": "2026-09-03",
+                "updated_at": "2026-09-03T12:00:00Z",
+            },
+            {
+                "id": "done-item",
+                "sequence_id": 4,
+                "name": "Fix old timeout",
+                "priority": "high",
+                "state": "done-id",
+                "target_date": "2026-09-01",
+            },
+        ]
+        with self._patch_api(api), patch.object(server, "_today", return_value=date(2026, 9, 4)):
+            result = server.list_work_items(
+                project_id=PROJECT_ID,
+                query="timeout",
+                state_types=["started"],
+                assignee_ids=["member-id"],
+                label_ids=["engineering-id"],
+                priorities=["high"],
+                overdue_only=True,
+                include_completed=False,
+            )
+
+        self.assertEqual(result["matched"], 1)
+        self.assertEqual(result["work_items"][0]["identifier"], "TEST-3")
+        self.assertEqual(result["work_items"][0]["state"]["type"], "started")
+
+    def test_list_work_items_resolves_module_membership_and_cycle_id(self) -> None:
+        api = _Api()
+        api.items = [
+            {"id": "selected-id", "name": "Selected", "state": "started-id", "cycle_id": "cycle-id"},
+            {"id": "other-id", "name": "Other", "state": "started-id", "cycle_id": "other-cycle"},
+        ]
+        api.modules = lambda project_id: [{"id": "module-id", "name": "Playback"}]  # type: ignore[method-assign]
+        api.module_work_items = lambda project_id, module_id: [{"issue_id": "selected-id"}]  # type: ignore[method-assign]
+        with self._patch_api(api):
+            result = server.list_work_items(
+                project_id=PROJECT_ID,
+                module_ids=["module-id"],
+                cycle_ids=["cycle-id"],
+            )
+
+        self.assertEqual(result["matched"], 1)
+        self.assertEqual(result["work_items"][0]["modules"], [{"id": "module-id", "name": "Playback"}])
+        self.assertEqual(result["work_items"][0]["cycles"], [{"id": "cycle-id", "name": None}])
+
+    def test_project_briefing_surfaces_attention_categories(self) -> None:
+        api = _Api()
+        api.items = [
+            {
+                "id": "attention-id",
+                "sequence_id": 5,
+                "name": "Stabilize playback",
+                "priority": "urgent",
+                "state": "started-id",
+                "target_date": "2026-09-01",
+                "updated_at": "2026-08-01T00:00:00Z",
+            },
+            {"id": "done-id-2", "name": "Shipped", "priority": "medium", "state": "done-id"},
+        ]
+        now = datetime(2026, 9, 4, tzinfo=timezone.utc)
+        with self._patch_api(api), patch.object(server, "_today", return_value=date(2026, 9, 4)), patch.object(server, "_utc_now", return_value=now):
+            result = server.get_project_briefing(project_id=PROJECT_ID, stale_after_days=14)
+
+        self.assertEqual(result["summary"]["active"], 1)
+        self.assertEqual(result["attention"]["overdue"]["count"], 1)
+        self.assertEqual(result["attention"]["stale"]["count"], 1)
+        self.assertEqual(result["attention"]["unassigned"]["count"], 1)
+        self.assertEqual(result["attention"]["without_estimate"]["count"], 1)
+
+    def test_relation_creation_is_previewed_verified_and_idempotent(self) -> None:
+        api = _Api()
+        with self._patch_api(api):
+            preview = server.add_work_item_relation(
+                project_id=PROJECT_ID,
+                work_item_id="item-id",
+                relation_type="blocked_by",
+                related_work_item_ids=["blocker-id"],
+            )
+            created = server.add_work_item_relation(
+                project_id=PROJECT_ID,
+                work_item_id="item-id",
+                relation_type="blocked_by",
+                related_work_item_ids=["blocker-id"],
+                confirm=True,
+            )
+            repeated = server.add_work_item_relation(
+                project_id=PROJECT_ID,
+                work_item_id="item-id",
+                relation_type="blocked_by",
+                related_work_item_ids=["blocker-id"],
+                confirm=True,
+            )
+
+        self.assertEqual(preview["status"], "preview")
+        self.assertEqual(created["status"], "related")
+        self.assertEqual(created["created"], ["blocker-id"])
+        self.assertEqual(repeated["already_present"], ["blocker-id"])
+        self.assertEqual(api.events, ["relations"])
+
+    def test_cancellation_records_reason_before_state_and_retries_safely(self) -> None:
+        api = _Api()
+        arguments = {
+            "project_id": PROJECT_ID,
+            "work_item_id": "item-id",
+            "reason": "Superseded by the unified player.",
+            "follow_ups": ["Link the replacement from release notes"],
+        }
+        with self._patch_api(api):
+            cancelled = server.cancel_standard_work_item(**arguments)
+            retried = server.cancel_standard_work_item(**arguments)
+
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(retried["status"], "already_cancelled")
+        self.assertEqual(api.events, ["comment", "update-state"])
+        self.assertEqual(len(api.comments_data), 1)
+
+    def test_generic_update_cannot_cancel_work(self) -> None:
+        api = _Api()
+        with self._patch_api(api):
+            with self.assertRaisesRegex(server.PlaneWorkflowError, "cancel_standard_work_item"):
+                server.update_standard_work_item(project_id=PROJECT_ID, work_item_id="item-id", state_id="cancelled-id")
+
     def test_fastmcp_schema_requires_completion_facts_and_positive_minutes(self) -> None:
         tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
         schema = tools["complete_standard_work_item"].parameters
@@ -382,6 +590,19 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), {"work_item_id", "summary", "verification"})
         integer_schema = next(option for option in schema["properties"]["actual_minutes"]["anyOf"] if option.get("type") == "integer")
         self.assertEqual(integer_schema["minimum"], 1)
+
+    def test_fastmcp_schema_registers_v05_tools_and_required_write_fields(self) -> None:
+        tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+
+        self.assertTrue(
+            {"list_work_items", "get_project_briefing", "get_work_item_relations", "add_work_item_relation", "cancel_standard_work_item"}.issubset(tools)
+        )
+        self.assertEqual(
+            set(tools["add_work_item_relation"].parameters["required"]),
+            {"work_item_id", "relation_type", "related_work_item_ids"},
+        )
+        self.assertEqual(set(tools["cancel_standard_work_item"].parameters["required"]), {"work_item_id", "reason"})
+        self.assertEqual(set(tools["get_work_item_relations"].parameters["required"]), {"work_item_id"})
 
 
 if __name__ == "__main__":

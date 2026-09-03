@@ -42,6 +42,16 @@ DEFAULT_PLAN_DIR = Path.home() / ".codex" / "plane-workflow" / "plans"
 VALID_PRIORITIES = {"urgent", "high", "medium", "low", "none"}
 VALID_TYPES = {"bug", "improvement", "task"}
 VALID_COMPLEXITIES = {"tiny", "small", "medium", "large"}
+VALID_RELATION_TYPES = {
+    "blocking",
+    "blocked_by",
+    "duplicate",
+    "relates_to",
+    "start_before",
+    "start_after",
+    "finish_before",
+    "finish_after",
+}
 WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
 NonNegativeInt = Annotated[int, Field(ge=0)]
 PositiveInt = Annotated[int, Field(ge=1)]
@@ -49,6 +59,21 @@ PositiveInt = Annotated[int, Field(ge=1)]
 
 class PlaneWorkflowError(RuntimeError):
     """A safe error suitable for returning through MCP."""
+
+
+def _safe_api_detail(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("detail", "message", "error"):
+        value = payload.get(key)
+        if not isinstance(value, str):
+            continue
+        detail = re.sub(r"\s+", " ", value).strip()
+        lowered = detail.casefold()
+        unsafe_markers = ("http://", "https://", "@", "\\", "<", ">", "api key", "token", "secret", "traceback")
+        if detail and len(detail) <= 200 and not any(marker in lowered for marker in unsafe_markers):
+            return detail
+    return ""
 
 
 @dataclass(frozen=True)
@@ -194,7 +219,13 @@ def _validate_profile(profile: dict[str, Any]) -> list[str]:
             mode = planning.get("mode")
             if mode is not None and mode not in {"advisory", "strict"}:
                 errors.append("planning.mode must be advisory or strict.")
-            for key in ("default_assignee_id", "default_unstarted_state_id", "default_started_state_id", "default_completed_state_id"):
+            for key in (
+                "default_assignee_id",
+                "default_unstarted_state_id",
+                "default_started_state_id",
+                "default_completed_state_id",
+                "default_cancelled_state_id",
+            ):
                 value = planning.get(key)
                 if value is not None and (not isinstance(value, str) or not _text(value)):
                     errors.append(f"planning.{key} must be a nonempty string.")
@@ -331,7 +362,13 @@ class PlaneApi:
         except requests.RequestException as error:
             raise PlaneWorkflowError("Plane API request failed before a response was received.") from error
         if not response.ok:
-            raise PlaneWorkflowError(f"Plane API request failed with HTTP {response.status_code}.")
+            try:
+                error_payload = response.json()
+            except ValueError:
+                error_payload = None
+            detail = _safe_api_detail(error_payload)
+            suffix = f": {detail}" if detail else ""
+            raise PlaneWorkflowError(f"Plane API request failed with HTTP {response.status_code}{suffix}.")
         if not response.content:
             return None
         try:
@@ -342,11 +379,33 @@ class PlaneApi:
     def project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"projects/{project_id}")
 
+    def paginated_results(self, path: str) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for _ in range(10_000):
+            params: dict[str, Any] = {"per_page": 100}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self.request("GET", path, params=params)
+            page_results = _results(payload)
+            results.extend(page_results)
+            if not isinstance(payload, dict):
+                return results
+            next_cursor = payload.get("next_cursor")
+            if not payload.get("next_page_results") or not isinstance(next_cursor, str) or not next_cursor:
+                return results
+            if next_cursor in seen_cursors:
+                raise PlaneWorkflowError("Plane repeated a pagination cursor; the result was not safe to continue.")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        raise PlaneWorkflowError("Plane returned too many pages to process safely.")
+
     def projects(self) -> list[dict[str, Any]]:
         return _results(self.request("GET", "projects", params={"per_page": 1000}))
 
     def modules(self, project_id: str) -> list[dict[str, Any]]:
-        return _results(self.request("GET", f"projects/{project_id}/modules", params={"per_page": 1000}))
+        return self.paginated_results(f"projects/{project_id}/modules")
 
     def states(self, project_id: str) -> list[dict[str, Any]]:
         return _results(self.request("GET", f"projects/{project_id}/states", params={"per_page": 1000}))
@@ -380,18 +439,34 @@ class PlaneApi:
         """Return every work item, including projects with more than one API page."""
         items: list[dict[str, Any]] = []
         total_count: int | None = None
-        page = 1
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        page_count = 0
         while True:
-            payload = self.request("GET", f"projects/{project_id}/work-items", params={"per_page": 100, "page": page})
+            page_count += 1
+            if page_count > 10_000:
+                raise PlaneWorkflowError("Plane returned too many work-item pages to process safely.")
+            params: dict[str, Any] = {"per_page": 100}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self.request("GET", f"projects/{project_id}/work-items", params=params)
             page_items = _results(payload)
             items.extend(page_items)
-            if isinstance(payload, dict) and isinstance(payload.get("total_count"), int):
-                total_count = payload["total_count"]
-            if not page_items or (total_count is not None and len(items) >= total_count):
+            if isinstance(payload, dict):
+                reported_total = payload.get("total_results", payload.get("total_count"))
+                if isinstance(reported_total, int):
+                    total_count = reported_total
+                next_cursor = payload.get("next_cursor")
+                has_next = bool(payload.get("next_page_results"))
+            else:
+                next_cursor = None
+                has_next = False
+            if not page_items or not has_next or not isinstance(next_cursor, str) or not next_cursor:
                 break
-            page += 1
-            if page > 10_000:
-                raise PlaneWorkflowError("Plane returned too many work-item pages to export safely.")
+            if next_cursor in seen_cursors:
+                raise PlaneWorkflowError("Plane repeated a work-item pagination cursor; the result was not safe to continue.")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
         return items, total_count
 
     def work_item(self, project_id: str, work_item_id: str) -> dict[str, Any]:
@@ -403,6 +478,28 @@ class PlaneApi:
                 "GET",
                 f"projects/{project_id}/work-items/{work_item_id}/links",
                 params={"per_page": 1000},
+            )
+        )
+
+    def work_item_relations(self, project_id: str, work_item_id: str) -> dict[str, Any]:
+        payload = self.request("GET", f"projects/{project_id}/work-items/{work_item_id}/relations")
+        if not isinstance(payload, dict):
+            raise PlaneWorkflowError("Plane returned an invalid work-item relations response.")
+        return payload
+
+    def create_work_item_relations(
+        self,
+        project_id: str,
+        work_item_id: str,
+        *,
+        relation_type: str,
+        related_work_item_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        return _results(
+            self.request(
+                "POST",
+                f"projects/{project_id}/work-items/{work_item_id}/relations",
+                payload={"relation_type": relation_type, "issues": related_work_item_ids},
             )
         )
 
@@ -520,13 +617,7 @@ class PlaneApi:
         )
 
     def module_work_items(self, project_id: str, module_id: str) -> list[dict[str, Any]]:
-        return _results(
-            self.request(
-                "GET",
-                f"projects/{project_id}/modules/{module_id}/module-issues",
-                params={"per_page": 1000},
-            )
-        )
+        return self.paginated_results(f"projects/{project_id}/modules/{module_id}/module-issues")
 
 
 def _project_view(project: StoredPlaneProject | None) -> dict[str, str | None] | None:
@@ -905,6 +996,198 @@ def _work_item_summary(item: dict[str, Any]) -> dict[str, Any]:
     return {"id": item.get("id"), "sequence_id": item.get("sequence_id"), "name": item.get("name"), "priority": item.get("priority")}
 
 
+def _nested_values(value: Any, *keys: str) -> list[dict[str, Any]]:
+    values = value if isinstance(value, list) else [value]
+    normalized: list[dict[str, Any]] = []
+    for entry in values:
+        if isinstance(entry, str) and _text(entry):
+            normalized.append({"id": entry, "name": None})
+        elif isinstance(entry, dict):
+            nested = next((entry.get(key) for key in keys if isinstance(entry.get(key), dict)), None)
+            source = nested if isinstance(nested, dict) else entry
+            identifier = source.get("id") or entry.get("id") or next((entry.get(f"{key}_id") for key in keys if entry.get(f"{key}_id")), None)
+            if identifier:
+                normalized.append(
+                    {
+                        "id": str(identifier),
+                        "name": source.get("display_name") or source.get("name") or source.get("email") or entry.get("name"),
+                    }
+                )
+    return normalized
+
+
+def _item_collection(item: dict[str, Any], singular: str, plural: str | None = None) -> list[dict[str, Any]]:
+    fields = [plural or f"{singular}s", singular, f"{singular}_details", f"{singular}_detail"]
+    for field in fields:
+        if field in item and item[field] is not None:
+            return _nested_values(item[field], singular, "member")
+    identifiers = item.get(f"{singular}_ids")
+    if identifiers is None:
+        identifiers = item.get(f"{singular}_id")
+    return _nested_values(identifiers, singular, "member") if identifiers is not None else []
+
+
+def _attach_module_memberships(
+    api: PlaneApi,
+    project_id: str,
+    items: list[dict[str, Any]],
+    module_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not module_ids:
+        return items
+    modules = {str(module["id"]): module for module in api.modules(project_id) if module.get("id")}
+    unknown = [module_id for module_id in module_ids if module_id not in modules]
+    if unknown:
+        raise PlaneWorkflowError("One or more module_ids are not available in this project. Use get_project_workflow_context first.")
+    memberships: dict[str, list[dict[str, Any]]] = {}
+    for module_id in module_ids:
+        module = modules[module_id]
+        module_view = {"id": module_id, "name": module.get("name")}
+        for member in api.module_work_items(project_id, module_id):
+            work_item_id = member.get("issue_id") or member.get("work_item_id") or member.get("id")
+            nested = member.get("issue") or member.get("work_item")
+            if isinstance(nested, dict):
+                work_item_id = nested.get("id") or work_item_id
+            if work_item_id:
+                memberships.setdefault(str(work_item_id), []).append(module_view)
+    enriched: list[dict[str, Any]] = []
+    for item in items:
+        copy = dict(item)
+        copy["modules"] = memberships.get(str(item.get("id")), [])
+        enriched.append(copy)
+    return enriched
+
+
+def _item_state(item: dict[str, Any], states_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    state_id = _item_state_id(item)
+    source = states_by_id.get(state_id or "", {})
+    raw = item.get("state")
+    if isinstance(raw, dict):
+        source = {**source, **raw}
+    return {
+        "id": state_id,
+        "name": source.get("name"),
+        "type": _text(str(source.get("type") or source.get("group") or "")).casefold() or None,
+    }
+
+
+def _work_item_view(
+    item: dict[str, Any],
+    *,
+    project_identifier: str | None,
+    states_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    sequence_id = item.get("sequence_id")
+    estimate = item.get("estimate_point", item.get("point"))
+    if isinstance(estimate, dict):
+        estimate = estimate.get("value") or estimate.get("key") or estimate.get("id")
+    return {
+        "id": item.get("id"),
+        "identifier": f"{project_identifier}-{sequence_id}" if project_identifier and sequence_id is not None else None,
+        "sequence_id": sequence_id,
+        "name": item.get("name"),
+        "priority": item.get("priority"),
+        "state": _item_state(item, states_by_id),
+        "assignees": _item_collection(item, "assignee"),
+        "labels": _item_collection(item, "label"),
+        "modules": _item_collection(item, "module"),
+        "cycles": _item_collection(item, "cycle"),
+        "estimate": estimate,
+        "start_date": item.get("start_date"),
+        "target_date": item.get("target_date"),
+        "updated_at": item.get("updated_at"),
+    }
+
+
+def _filter_work_items(
+    items: list[dict[str, Any]],
+    *,
+    query: str | None,
+    state_ids: list[str],
+    state_types: list[str],
+    assignee_ids: list[str],
+    label_ids: list[str],
+    module_ids: list[str],
+    cycle_ids: list[str],
+    priorities: list[str],
+    overdue_only: bool,
+    include_completed: bool,
+    updated_after: date | None,
+    updated_before: date | None,
+    today: date,
+    states_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    query_text = _normalize(query)
+    for item in items:
+        state = _item_state(item, states_by_id)
+        state_type = state["type"]
+        if query_text and query_text not in _normalize(f"{item.get('name', '')} {_item_description_text(item)}"):
+            continue
+        if state_ids and state["id"] not in state_ids:
+            continue
+        if state_types and state_type not in state_types:
+            continue
+        if not include_completed and state_type in {"completed", "cancelled"}:
+            continue
+        item_assignees = {entry["id"] for entry in _item_collection(item, "assignee")}
+        item_labels = {entry["id"] for entry in _item_collection(item, "label")}
+        item_modules = {entry["id"] for entry in _item_collection(item, "module")}
+        item_cycles = {entry["id"] for entry in _item_collection(item, "cycle")}
+        if assignee_ids and not item_assignees.intersection(assignee_ids):
+            continue
+        if label_ids and not set(label_ids).issubset(item_labels):
+            continue
+        if module_ids and not item_modules.intersection(module_ids):
+            continue
+        if cycle_ids and not item_cycles.intersection(cycle_ids):
+            continue
+        if priorities and item.get("priority") not in priorities:
+            continue
+        target_date = _date_value(item.get("target_date"))
+        if overdue_only and (not target_date or target_date >= today or state_type in {"completed", "cancelled"}):
+            continue
+        updated = _updated_at(item.get("updated_at"))
+        if updated_after and (not updated or updated.date() < updated_after):
+            continue
+        if updated_before and (not updated or updated.date() > updated_before):
+            continue
+        selected.append(item)
+    return selected
+
+
+def _date_value(value: Any) -> date | None:
+    if not isinstance(value, str) or not _text(value):
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _relation_view(payload: dict[str, Any]) -> dict[str, list[dict[str, str | None]]]:
+    result: dict[str, list[dict[str, str | None]]] = {}
+    for relation_type in VALID_RELATION_TYPES:
+        references: list[dict[str, str | None]] = []
+        raw = payload.get(relation_type, [])
+        if not isinstance(raw, list):
+            raw = []
+        for entry in raw:
+            if isinstance(entry, str) and _text(entry):
+                references.append({"project_id": None, "work_item_id": entry})
+            elif isinstance(entry, dict):
+                work_item_id = entry.get("issue_id") or entry.get("work_item_id") or entry.get("id")
+                if work_item_id:
+                    references.append(
+                        {
+                            "project_id": str(entry.get("project_id")) if entry.get("project_id") else None,
+                            "work_item_id": str(work_item_id),
+                        }
+                    )
+        result[relation_type] = references
+    return result
+
+
 def _profile_view(profile: dict[str, Any]) -> dict[str, Any]:
     """Return configuration only; profiles never contain Plane credentials."""
     return {
@@ -1261,6 +1544,24 @@ def _render_completion_comment(
     return "".join(body)
 
 
+def _cancellation_external_id(work_item_id: str, reason: str, follow_ups: list[str], state_id: str) -> str:
+    content = json.dumps(
+        {"work_item_id": work_item_id, "reason": reason, "follow_ups": follow_ups, "state_id": state_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "cancel-" + hashlib.sha256(content.encode()).hexdigest()
+
+
+def _render_cancellation_comment(reason: str, follow_ups: list[str]) -> str:
+    body = [f"<p><strong>Cancellation reason</strong></p><p>{html.escape(reason)}</p>"]
+    if follow_ups:
+        body.append("<p><strong>Follow-ups</strong></p><ul>")
+        body.extend(f"<li>{html.escape(item)}</li>" for item in follow_ups)
+        body.append("</ul>")
+    return "".join(body)
+
+
 def _normalize_evidence_links(evidence: list[dict[str, str]]) -> list[dict[str, str | None]]:
     if not evidence:
         raise PlaneWorkflowError("Provide at least one evidence link.")
@@ -1424,8 +1725,9 @@ mcp = FastMCP(
         "Use these tools to create and maintain Plane work items through configurable workflow rules. "
         "For a new installation, call get_plane_workflow_setup_status first and run plane-workflow setup "
         "when it reports needs_setup. Before writes, call get_active_plane_context and select the intended "
-        "workspace and project when needed. Use get_project_workflow_context before writes and audit_work_items before bulk changes."
-        " Plan new work with scope and complexity, start it explicitly, and use complete_standard_work_item for every Done transition."
+        "workspace and project when needed. Use get_project_briefing or list_work_items to understand existing work, "
+        "and get_project_workflow_context before writes. Plan new work with scope and complexity, start it explicitly, "
+        "use complete_standard_work_item for every Done transition, and cancel_standard_work_item for cancellation."
     ),
 )
 
@@ -1646,6 +1948,10 @@ def diagnose_plane_connection(project_id: str | None = None) -> dict[str, Any]:
         }
     connection = {"configured": True, "base_url": settings.base_url, "workspace": settings.workspace}
     if not project_id:
+        active_project = _active_project(PlaneApi(settings))
+        if active_project is not None:
+            project_id = active_project.id
+    if not project_id:
         return {
             "status": "configured",
             "connection": connection,
@@ -1654,8 +1960,6 @@ def diagnose_plane_connection(project_id: str | None = None) -> dict[str, Any]:
         }
 
     api = PlaneApi(settings)
-    if project_id is None and _active_project(api) is not None:
-        project_id = _project_id(api, None)
     checks: dict[str, dict[str, Any]] = {"project": _connection_probe(lambda: api.project(project_id))}
     if not checks["project"]["available"]:
         return {
@@ -1964,6 +2268,255 @@ def find_work_items(project_id: str | None = None, query: str = "", max_results:
         "query": search_query,
         "work_items": results[:max_results],
         "note": "This is a read-only lookup. Use the returned work-item id for a targeted update.",
+    }
+
+
+@mcp.tool()
+def list_work_items(
+    project_id: str | None = None,
+    query: str | None = None,
+    state_ids: list[str] | None = None,
+    state_types: list[Literal["backlog", "unstarted", "started", "completed", "cancelled"]] | None = None,
+    assignee_ids: list[str] | None = None,
+    label_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    cycle_ids: list[str] | None = None,
+    priorities: list[Literal["urgent", "high", "medium", "low", "none"]] | None = None,
+    overdue_only: bool = False,
+    include_completed: bool = True,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    offset: NonNegativeInt = 0,
+    max_results: Annotated[int, Field(ge=1, le=200)] = 50,
+) -> dict[str, Any]:
+    """List project work items with cross-edition local filters and bounded pagination."""
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise PlaneWorkflowError("offset must be a non-negative whole number.")
+    if isinstance(max_results, bool) or not isinstance(max_results, int) or not 1 <= max_results <= 200:
+        raise PlaneWorkflowError("max_results must be a whole number from 1 to 200.")
+    selected_state_ids = _validate_id_list(state_ids, "state_ids") or []
+    selected_assignees = _validate_id_list(assignee_ids, "assignee_ids") or []
+    selected_labels = _validate_id_list(label_ids, "label_ids") or []
+    selected_modules = _validate_id_list(module_ids, "module_ids") or []
+    selected_cycles = _validate_id_list(cycle_ids, "cycle_ids") or []
+    selected_types = list(dict.fromkeys(state_types or []))
+    selected_priorities = list(dict.fromkeys(priorities or []))
+    after = date.fromisoformat(_validate_date(updated_after, "updated_after")) if updated_after else None
+    before = date.fromisoformat(_validate_date(updated_before, "updated_before")) if updated_before else None
+    if after and before and before < after:
+        raise PlaneWorkflowError("updated_before cannot be earlier than updated_after.")
+
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
+    profile, project = _resolve_profile(api, project_id)
+    states = api.states(project_id)
+    states_by_id = {str(state["id"]): state for state in states if state.get("id")}
+    items, total_count = api.work_items(project_id)
+    items = _attach_module_memberships(api, project_id, items, selected_modules)
+    filtered = _filter_work_items(
+        items,
+        query=query,
+        state_ids=selected_state_ids,
+        state_types=selected_types,
+        assignee_ids=selected_assignees,
+        label_ids=selected_labels,
+        module_ids=selected_modules,
+        cycle_ids=selected_cycles,
+        priorities=selected_priorities,
+        overdue_only=overdue_only,
+        include_completed=include_completed,
+        updated_after=after,
+        updated_before=before,
+        today=_today(_planning_policy(profile).get("timezone")),
+        states_by_id=states_by_id,
+    )
+    filtered.sort(key=lambda item: (_date_value(item.get("target_date")) or date.max, str(item.get("name", "")).casefold()))
+    page = filtered[offset : offset + max_results]
+    project_identifier = _text(str(project.get("identifier", ""))) or None
+    return {
+        "status": "work_items",
+        "project": {"id": project.get("id"), "identifier": project_identifier, "name": project.get("name")},
+        "project_total": total_count if total_count is not None else len(items),
+        "matched": len(filtered),
+        "offset": offset,
+        "returned": len(page),
+        "has_more": offset + len(page) < len(filtered),
+        "work_items": [
+            _work_item_view(item, project_identifier=project_identifier, states_by_id=states_by_id) for item in page
+        ],
+        "note": "Filtering is performed locally for compatibility across Plane editions. This tool does not change Plane.",
+    }
+
+
+@mcp.tool()
+def get_project_briefing(
+    project_id: str | None = None,
+    stale_after_days: Annotated[int, Field(ge=1, le=365)] | None = None,
+    attention_limit: Annotated[int, Field(ge=1, le=100)] = 25,
+) -> dict[str, Any]:
+    """Summarize project execution and identify overdue, stale, unassigned, and unplanned active work."""
+    if stale_after_days is not None and (
+        isinstance(stale_after_days, bool) or not isinstance(stale_after_days, int) or not 1 <= stale_after_days <= 365
+    ):
+        raise PlaneWorkflowError("stale_after_days must be a whole number from 1 to 365.")
+    if isinstance(attention_limit, bool) or not isinstance(attention_limit, int) or not 1 <= attention_limit <= 100:
+        raise PlaneWorkflowError("attention_limit must be a whole number from 1 to 100.")
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
+    profile, project = _resolve_profile(api, project_id)
+    stale_days = stale_after_days or profile.get("stale_after_days", 90)
+    if not isinstance(stale_days, int) or isinstance(stale_days, bool) or stale_days < 1:
+        stale_days = 90
+    states = api.states(project_id)
+    states_by_id = {str(state["id"]): state for state in states if state.get("id")}
+    items, total_count = api.work_items(project_id)
+    today = _today(_planning_policy(profile).get("timezone"))
+    stale_boundary = _utc_now() - timedelta(days=stale_days)
+    project_identifier = _text(str(project.get("identifier", ""))) or None
+    by_state: dict[str, int] = {}
+    by_priority: dict[str, int] = {}
+    active: list[dict[str, Any]] = []
+    overdue: list[dict[str, Any]] = []
+    stale: list[dict[str, Any]] = []
+    unassigned: list[dict[str, Any]] = []
+    without_target: list[dict[str, Any]] = []
+    without_estimate: list[dict[str, Any]] = []
+    for item in items:
+        state = _item_state(item, states_by_id)
+        state_name = _text(str(state.get("name") or state.get("type") or "Unknown"))
+        by_state[state_name] = by_state.get(state_name, 0) + 1
+        priority = _text(str(item.get("priority") or "none"))
+        by_priority[priority] = by_priority.get(priority, 0) + 1
+        if state["type"] in {"completed", "cancelled"}:
+            continue
+        active.append(item)
+        target = _date_value(item.get("target_date"))
+        updated = _updated_at(item.get("updated_at"))
+        if target and target < today:
+            overdue.append(item)
+        if updated and updated < stale_boundary:
+            stale.append(item)
+        if not _item_collection(item, "assignee"):
+            unassigned.append(item)
+        if not target:
+            without_target.append(item)
+        estimate = item.get("estimate_point", item.get("point"))
+        if estimate is None or estimate == "":
+            without_estimate.append(item)
+
+    def attention(values: list[dict[str, Any]]) -> dict[str, Any]:
+        ordered = sorted(values, key=lambda item: (_date_value(item.get("target_date")) or date.max, str(item.get("name", "")).casefold()))
+        return {
+            "count": len(values),
+            "work_items": [
+                _work_item_view(item, project_identifier=project_identifier, states_by_id=states_by_id)
+                for item in ordered[:attention_limit]
+            ],
+            "truncated": len(values) > attention_limit,
+        }
+
+    return {
+        "status": "briefing",
+        "as_of": today.isoformat(),
+        "project": {"id": project.get("id"), "identifier": project_identifier, "name": project.get("name")},
+        "summary": {
+            "total": total_count if total_count is not None else len(items),
+            "active": len(active),
+            "by_state": dict(sorted(by_state.items())),
+            "by_priority": dict(sorted(by_priority.items())),
+        },
+        "attention": {
+            "overdue": attention(overdue),
+            "stale": attention(stale),
+            "unassigned": attention(unassigned),
+            "without_target_date": attention(without_target),
+            "without_estimate": attention(without_estimate),
+        },
+        "stale_after_days": stale_days,
+        "note": "This briefing is read-only. Relation blockers are available through get_work_item_relations.",
+    }
+
+
+@mcp.tool()
+def get_work_item_relations(work_item_id: str, project_id: str | None = None) -> dict[str, Any]:
+    """Read one work item's dependency, duplicate, schedule, and related-work relationships."""
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
+    item = _work_item_for_project(api, project_id, work_item_id)
+    relations = _relation_view(api.work_item_relations(project_id, work_item_id))
+    return {
+        "status": "relations",
+        "project_id": project_id,
+        "work_item": _work_item_summary(item),
+        "relations": relations,
+        "counts": {relation_type: len(references) for relation_type, references in relations.items()},
+        "note": "blocking means this item blocks the referenced items; blocked_by means the referenced items block this item.",
+    }
+
+
+@mcp.tool()
+def add_work_item_relation(
+    work_item_id: str,
+    relation_type: Literal[
+        "blocking",
+        "blocked_by",
+        "duplicate",
+        "relates_to",
+        "start_before",
+        "start_after",
+        "finish_before",
+        "finish_after",
+    ],
+    related_work_item_ids: list[str],
+    project_id: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Preview or create same-project work-item relations. Set confirm=true after reviewing the relation direction."""
+    if relation_type not in VALID_RELATION_TYPES:
+        raise PlaneWorkflowError("relation_type is not supported.")
+    related_ids = _validate_id_list(related_work_item_ids, "related_work_item_ids") or []
+    if not related_ids:
+        raise PlaneWorkflowError("related_work_item_ids requires at least one work-item ID.")
+    if work_item_id in related_ids:
+        raise PlaneWorkflowError("A work item cannot be related to itself.")
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
+    source = _work_item_for_project(api, project_id, work_item_id)
+    targets = [_work_item_for_project(api, project_id, related_id) for related_id in related_ids]
+    current = _relation_view(api.work_item_relations(project_id, work_item_id))
+    existing_ids = {reference["work_item_id"] for reference in current[relation_type]}
+    missing_ids = [related_id for related_id in related_ids if related_id not in existing_ids]
+    preview = {
+        "project_id": project_id,
+        "work_item": _work_item_summary(source),
+        "relation_type": relation_type,
+        "related_work_items": [_work_item_summary(item) for item in targets],
+        "already_present": [related_id for related_id in related_ids if related_id in existing_ids],
+        "will_create": missing_ids,
+    }
+    if not confirm:
+        return {
+            "status": "preview",
+            **preview,
+            "note": "No Plane data was changed. Set confirm=true after reviewing the relation direction.",
+        }
+    if missing_ids:
+        api.create_work_item_relations(
+            project_id,
+            work_item_id,
+            relation_type=relation_type,
+            related_work_item_ids=missing_ids,
+        )
+    updated = _relation_view(api.work_item_relations(project_id, work_item_id))
+    updated_ids = {reference["work_item_id"] for reference in updated[relation_type]}
+    not_created = [related_id for related_id in missing_ids if related_id not in updated_ids]
+    return {
+        "status": "related" if not not_created else "partially_related",
+        **preview,
+        "created": [related_id for related_id in missing_ids if related_id in updated_ids],
+        "not_created": not_created,
+        "relations": updated,
+        "note": "Plane may silently ignore unknown relation targets; not_created reports any target absent after verification.",
     }
 
 
@@ -2426,6 +2979,92 @@ def complete_standard_work_item(
 
 
 @mcp.tool()
+def cancel_standard_work_item(
+    work_item_id: str,
+    reason: str,
+    project_id: str | None = None,
+    follow_ups: list[str] | None = None,
+    state_id: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Preview or cancel unfinished work after recording a factual reason and optional follow-ups."""
+    selected_reason = _text(reason)
+    if not selected_reason:
+        raise PlaneWorkflowError("reason is required.")
+    if len(selected_reason) > 4000:
+        raise PlaneWorkflowError("reason must be 4,000 characters or fewer.")
+    selected_follow_ups = _normalize_text_list(follow_ups, "follow_ups")
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id, enforce_active=True)
+    profile, _ = _resolve_profile(api, project_id)
+    selected_state = _text(state_id) or _text(_planning_policy(profile).get("default_cancelled_state_id"))
+    if not selected_state:
+        raise PlaneWorkflowError("Provide state_id or configure planning.default_cancelled_state_id.")
+    states = api.states(project_id)
+    if _state_type(states, selected_state) != "cancelled":
+        raise PlaneWorkflowError("The cancellation state must reference a Plane state with type cancelled.")
+    existing = _work_item_for_project(api, project_id, work_item_id)
+    current_type = _state_type(states, _item_state_id(existing))
+    if current_type == "completed":
+        raise PlaneWorkflowError("Completed work cannot be cancelled.")
+    external_id = _cancellation_external_id(work_item_id, selected_reason, selected_follow_ups, selected_state)
+    comment_html = _render_cancellation_comment(selected_reason, selected_follow_ups)
+    preview = {
+        "work_item": _work_item_summary(existing),
+        "state_id": selected_state,
+        "reason": selected_reason,
+        "follow_ups": selected_follow_ups,
+        "comment_html": comment_html,
+    }
+    if dry_run:
+        return {
+            "status": "preview",
+            "cancellation": preview,
+            "note": "No Plane data was changed. The reason will be recorded before the item is cancelled.",
+        }
+    try:
+        comments = api.work_item_comments(project_id, work_item_id)
+    except PlaneWorkflowError as error:
+        return {"status": "cancellation_pending", "stage": "comment_lookup", "reason": str(error), "cancellation": preview}
+    matching_comment = next((comment for comment in comments if comment.get("external_id") == external_id), None)
+    if current_type == "cancelled":
+        if matching_comment:
+            return {"status": "already_cancelled", "cancellation": preview, "comment_id": matching_comment.get("id")}
+        raise PlaneWorkflowError("This work item is already cancelled without this cancellation record; no comment was added.")
+    comment = matching_comment
+    if comment is None:
+        try:
+            comment = api.create_work_item_comment(
+                project_id,
+                work_item_id,
+                {
+                    "comment_html": comment_html,
+                    "access": "INTERNAL",
+                    "external_source": "plane-workflow-mcp",
+                    "external_id": external_id,
+                },
+            )
+        except PlaneWorkflowError as error:
+            return {"status": "cancellation_pending", "stage": "comment", "reason": str(error), "cancellation": preview}
+    try:
+        updated = api.update_work_item(project_id, work_item_id, {"state": selected_state})
+    except PlaneWorkflowError as error:
+        return {
+            "status": "cancellation_pending",
+            "stage": "state",
+            "reason": str(error),
+            "comment_id": comment.get("id"),
+            "cancellation": preview,
+        }
+    return {
+        "status": "cancelled",
+        "work_item": _work_item_summary(updated),
+        "comment_id": comment.get("id"),
+        "cancellation": preview,
+    }
+
+
+@mcp.tool()
 def update_standard_work_item(
     work_item_id: str,
     project_id: str | None = None,
@@ -2475,8 +3114,11 @@ def update_standard_work_item(
         cycle_id=selected_cycle,
         release_id=selected_release,
     )
-    if selected_state and _state_type(api.states(project_id), selected_state) == "completed":
+    selected_state_type = _state_type(api.states(project_id), selected_state) if selected_state else None
+    if selected_state_type == "completed":
         raise PlaneWorkflowError("Use complete_standard_work_item to move a work item to a completed state with completion notes.")
+    if selected_state_type == "cancelled":
+        raise PlaneWorkflowError("Use cancel_standard_work_item to move a work item to a cancelled state with a factual reason.")
     selected_estimate = _resolve_estimate_selection(api, project_id, selected_estimate, required=False)
     existing = _work_item_for_project(api, project_id, work_item_id)
     payload: dict[str, Any] = {}

@@ -196,6 +196,8 @@ class PlaneBotAgent:
             "- `Create a bug for the media player: quality selection is missing.`\n"
             "- `Create a module called Observability.`\n"
             "- `Audit the current project backlog.`\n"
+            "- `Show me what needs attention in this project.`\n"
+            "- `Mark EXAMPLE-4 as blocked by EXAMPLE-2.`\n"
             "- `Find EXAMPLE-4 and change its priority to high.`\n"
             "I will show a draft before changing Plane."
         )

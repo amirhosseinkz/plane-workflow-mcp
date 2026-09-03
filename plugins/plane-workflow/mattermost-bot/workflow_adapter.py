@@ -48,6 +48,34 @@ WORKFLOW_TOOLS: list[dict[str, Any]] = [
     _function("get_project_workflow_profile", "Read the active profile and local project workflow settings.", _object("No arguments.", {})),
     _function("get_workflow_options", "Read available states, cycles, assignees, and related planning options.", _object("No arguments.", {})),
     _function("find_work_items", "Find work items by title, UUID, or reference such as EXAMPLE-4.", _object("Search arguments.", {"query": _string("Task title, UUID, or Plane reference."), "max_results": {"type": "integer", "minimum": 1, "maximum": 20}}, ["query"])),
+    _function("list_work_items", "List and filter project work items without changing Plane.", _object("Optional filters.", {
+        "query": _string("Text from the title or description."),
+        "state_ids": _string_list("Plane state IDs."),
+        "state_types": {"type": "array", "items": {"type": "string", "enum": ["backlog", "unstarted", "started", "completed", "cancelled"]}},
+        "assignee_ids": _string_list("Plane member IDs; any may match."),
+        "label_ids": _string_list("Plane label IDs; all must match."),
+        "module_ids": _string_list("Plane module IDs; any may match."),
+        "cycle_ids": _string_list("Plane cycle IDs; any may match."),
+        "priorities": {"type": "array", "items": {"type": "string", "enum": ["urgent", "high", "medium", "low", "none"]}},
+        "overdue_only": {"type": "boolean"},
+        "include_completed": {"type": "boolean"},
+        "updated_after": _string("Inclusive YYYY-MM-DD lower bound."),
+        "updated_before": _string("Inclusive YYYY-MM-DD upper bound."),
+        "offset": {"type": "integer", "minimum": 0},
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 200},
+    })),
+    _function("get_project_briefing", "Summarize active work and items needing attention.", _object("Briefing options.", {
+        "stale_after_days": {"type": "integer", "minimum": 1, "maximum": 365},
+        "attention_limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    })),
+    _function("get_work_item_relations", "Read dependencies and related work for one item.", _object("Relation lookup.", {
+        "work_item_id": _string("Work-item UUID."),
+    }, ["work_item_id"])),
+    _function("add_work_item_relation", "Draft a same-project dependency or other relation between work items.", _object("Relation details.", {
+        "work_item_id": _string("Source work-item UUID."),
+        "relation_type": {"type": "string", "enum": ["blocking", "blocked_by", "duplicate", "relates_to", "start_before", "start_after", "finish_before", "finish_after"]},
+        "related_work_item_ids": _string_list("Target work-item UUIDs in the same project."),
+    }, ["work_item_id", "relation_type", "related_work_item_ids"])),
     _function("find_duplicate_candidates", "Find likely duplicate work items for a proposed title.", _object("Search arguments.", {"title": _string("Proposed task title."), "min_score": {"type": "number", "minimum": 0, "maximum": 1}}, ["title"])),
     _function("audit_work_items", "Run a read-only quality and structure audit of the Plane project.", _object("No arguments.", {})),
     _function("create_standardization_plan", "Prepare a saved, reviewable cleanup plan without changing Plane.", _object("Plan options.", {"expires_in_hours": {"type": "integer", "minimum": 1, "maximum": 168}})),
@@ -88,6 +116,12 @@ WORKFLOW_TOOLS: list[dict[str, Any]] = [
         "actual_minutes": {"type": "integer", "minimum": 1, "description": "Actual active time only; never copy the estimate here."},
         "state_id": _string("Optional completed-state ID; otherwise the project profile default is used."),
     }, ["work_item_id", "summary", "verification"])),
+    _function("cancel_standard_work_item", "Draft a factual cancellation reason and cancelled-state transition for unfinished work.", _object("Cancellation details.", {
+        "work_item_id": _string("Work-item UUID returned by find_work_items."),
+        "reason": _string("Factual reason the work should no longer continue."),
+        "follow_ups": _string_list("Real replacement work or remaining actions."),
+        "state_id": _string("Optional cancelled-state ID; otherwise the project profile default is used."),
+    }, ["work_item_id", "reason"])),
     _function("update_standard_work_item", "Draft an update for one known Plane work item. Look it up first when only a title or reference is known.", _object("Update details.", {
         "work_item_id": _string("Work-item UUID returned by find_work_items."),
         "outcome": _string("New clear outcome/title."),
@@ -135,12 +169,17 @@ PROJECT_BOUND_ACTIONS = {
     "get_project_workflow_profile",
     "get_workflow_options",
     "find_work_items",
+    "list_work_items",
+    "get_project_briefing",
+    "get_work_item_relations",
+    "add_work_item_relation",
     "find_duplicate_candidates",
     "audit_work_items",
     "create_standardization_plan",
     "create_standard_work_item",
     "start_standard_work_item",
     "complete_standard_work_item",
+    "cancel_standard_work_item",
     "update_standard_work_item",
     "ensure_module",
     "save_project_workflow_profile",
@@ -153,6 +192,8 @@ WRITE_ACTIONS = {
     "create_standard_work_item",
     "start_standard_work_item",
     "complete_standard_work_item",
+    "cancel_standard_work_item",
+    "add_work_item_relation",
     "update_standard_work_item",
     "ensure_module",
     "save_project_workflow_profile",
@@ -199,8 +240,8 @@ class WorkflowAdapter:
     @staticmethod
     def _set_preview_mode(name: str, arguments: dict[str, Any], preview: bool) -> dict[str, Any]:
         adjusted = dict(arguments)
-        if name in {"create_standard_work_item", "start_standard_work_item", "complete_standard_work_item", "update_standard_work_item", "ensure_module"}:
+        if name in {"create_standard_work_item", "start_standard_work_item", "complete_standard_work_item", "cancel_standard_work_item", "update_standard_work_item", "ensure_module"}:
             adjusted["dry_run"] = preview
-        elif name in {"apply_standardization_plan", "save_project_workflow_profile", "add_work_item_evidence_links", "upload_work_item_attachment"}:
+        elif name in {"apply_standardization_plan", "save_project_workflow_profile", "add_work_item_relation", "add_work_item_evidence_links", "upload_work_item_attachment"}:
             adjusted["confirm"] = not preview
         return adjusted

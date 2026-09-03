@@ -1,6 +1,6 @@
 [project]
 name = "plane-workflow-mattermost-bot"
-version = "0.2.0"
+version = "0.3.0"
 description = "Optional local Mattermost companion for Plane Workflow"
 requires-python = ">=3.11"
 dependencies = [

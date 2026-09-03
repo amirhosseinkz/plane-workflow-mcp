@@ -15,7 +15,7 @@ body:
     attributes:
       label: Version
       description: Package or plugin version where you observed the problem.
-      placeholder: "0.2.0"
+      placeholder: "0.5.0"
     validations:
       required: true
 
