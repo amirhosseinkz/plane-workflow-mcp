@@ -1,7 +1,7 @@
 [project]
 name = "plane-workflow-mcp"
-version = "0.4.0"
-description = "Configurable Plane planning and work-item lifecycle MCP server"
+version = "0.5.0"
+description = "Configurable Plane planning, work visibility, relations, and lifecycle MCP server"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Plane Workflow Contributors" }]

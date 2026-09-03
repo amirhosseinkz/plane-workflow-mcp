@@ -100,6 +100,40 @@ class WorkflowAdapterTests(unittest.TestCase):
         self.assertTrue(captured[0][1]["dry_run"])
         self.assertTrue(captured[1][1]["dry_run"])
 
+    def test_v05_actions_are_project_bound_and_writes_are_previewed(self) -> None:
+        captured: list[tuple[str, dict[str, object]]] = []
+
+        def get_project_briefing(**arguments: object) -> dict[str, object]:
+            captured.append(("briefing", arguments))
+            return {"status": "briefing"}
+
+        def add_work_item_relation(**arguments: object) -> dict[str, object]:
+            captured.append(("relation", arguments))
+            return {"status": "preview"}
+
+        def cancel_standard_work_item(**arguments: object) -> dict[str, object]:
+            captured.append(("cancel", arguments))
+            return {"status": "preview"}
+
+        with patch.object(workflow_adapter.workflow, "get_project_briefing", get_project_briefing), patch.object(
+            workflow_adapter.workflow, "add_work_item_relation", add_work_item_relation
+        ), patch.object(workflow_adapter.workflow, "cancel_standard_work_item", cancel_standard_work_item):
+            briefing = self.adapter.execute("get_project_briefing", {})
+            relation = self.adapter.execute(
+                "add_work_item_relation",
+                {"work_item_id": "item-id", "relation_type": "blocked_by", "related_work_item_ids": ["blocker-id"]},
+            )
+            cancellation = self.adapter.execute(
+                "cancel_standard_work_item", {"work_item_id": "item-id", "reason": "Superseded"}
+            )
+
+        self.assertFalse(briefing.requires_confirmation)
+        self.assertTrue(relation.requires_confirmation)
+        self.assertTrue(cancellation.requires_confirmation)
+        self.assertEqual(captured[0][1]["project_id"], "example-project")
+        self.assertTrue(captured[1][1]["confirm"] is False)
+        self.assertTrue(captured[2][1]["dry_run"])
+
     def test_unknown_action_is_rejected(self) -> None:
         with self.assertRaisesRegex(WorkflowAdapterError, "not available"):
             self.adapter.execute("delete_everything", {})

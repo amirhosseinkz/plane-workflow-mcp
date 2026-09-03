@@ -1,6 +1,6 @@
 ---
 name: plane-workflow
-description: Create, update, audit, standardize, label, and organize Plane work items with the Plane Workflow MCP tools. Use when a user asks to create a Plane task or issue, turn a brief into a ticket, manage modules, or improve a Plane backlog.
+description: Inspect, create, relate, update, audit, standardize, and organize Plane work items with the Plane Workflow MCP tools. Use for project briefings, filtered work queries, dependencies, task lifecycles, modules, and backlog improvements.
 ---
 
 # Plane Workflow
@@ -15,6 +15,14 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 4. Call `get_project_workflow_context` before writing. Use `get_workflow_options` for state, cycle, assignee, and Plane estimate-point IDs.
 5. Use `get_project_workflow_profile` to inspect local project rules. Use `validate_workflow_profile` and `save_project_workflow_profile` to preview and explicitly save a project override.
 
+## Understand Existing Work
+
+1. Use `get_project_briefing` for a bounded overview of active work and overdue, stale, unassigned, unestimated, or unscheduled items.
+2. Use `list_work_items` for explicit filters. Assignee, module, and cycle filters match any supplied ID; label filters require all supplied IDs. Use `offset` and `max_results` when `has_more` is true.
+3. Use `find_work_items` for a title, UUID, or project reference lookup rather than as a project listing tool.
+4. Use `get_work_item_relations` before discussing dependency direction. `blocking` means the source blocks the target; `blocked_by` means the target blocks the source.
+5. Use `add_work_item_relation` as a preview first. Relation targets must belong to the selected project. Set `confirm=true` only after reviewing the source, targets, and direction.
+
 ## Reports
 
 1. For a report request, translate the user's language into `export_work_items_report` filters and layout. Resolve names exactly as Plane presents them; for example, use `filters={"state_names": ["Backlog", "In Progress"]}` for a backlog/in-progress report.
@@ -28,7 +36,7 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 3. Call `find_duplicate_candidates` when the request may overlap existing work. `create_standard_work_item` also stops exact and high-similarity duplicates unless the user deliberately allows one.
 4. Call `create_standard_work_item` for new work. In strict mode the server requires scope, complexity, assignment, an estimate mapping, planned dates, and an unstarted state. Profile defaults are policy, not invented values.
 5. Call `start_standard_work_item` when implementation begins. Preview first, then apply it so the actual start date and started state are recorded.
-6. Call `update_standard_work_item` for non-completion changes to a specific item. It preserves labels and descriptions and rejects direct transitions to a completed state.
+6. Call `update_standard_work_item` for ordinary changes to a specific item. It preserves labels and descriptions and rejects direct transitions to completed or cancelled states.
 7. Never invent a release association; the diagnostic reports whether Plane supports it.
 
 ## Complete Work
@@ -38,6 +46,12 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 3. Supply `actual_minutes` only when actual active time is known. Never copy the estimate into actual time and never delay a completed task to make its timeline look human.
 4. Preview the exact completion comment and state transition before applying them. The server records the comment and optional worklog before moving the item to Done.
 5. If the result is `completion_pending`, report the failed stage and retry the same completion safely after the underlying API problem is resolved.
+
+## Cancel Work
+
+1. Use `cancel_standard_work_item` for every transition to a cancelled state. Do not use the generic update tool.
+2. Supply a factual reason and only real replacement work or remaining actions as follow-ups.
+3. Preview the cancellation comment and state transition before applying them. The server records the comment before changing the state and supports safe retries.
 
 ## Evidence
 

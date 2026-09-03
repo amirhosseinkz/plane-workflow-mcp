@@ -1,15 +1,15 @@
 {
   "name": "plane-workflow",
-  "version": "0.4.0+codex.20260903010000",
-  "description": "Configurable Plane planning, work-item lifecycles, and report exports for Codex.",
+  "version": "0.5.0+codex.20260904010000",
+  "description": "Configurable Plane planning, project briefings, work-item relations, lifecycles, and report exports for Codex.",
   "author": {
     "name": "Plane Workflow Contributors"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Plane Workflow",
-    "shortDescription": "Plan, start, complete, and report on Plane work safely.",
-    "longDescription": "Set up a secure Plane connection, then plan, create, start, complete, audit, organize, and export work through configurable advisory or strict project profiles.",
+    "shortDescription": "Plan, inspect, relate, and complete Plane work safely.",
+    "longDescription": "Set up a secure Plane connection, then inspect, plan, create, relate, start, complete, cancel, audit, organize, and export work through configurable advisory or strict project profiles.",
     "developerName": "Plane Workflow Contributors",
     "category": "Productivity",
     "capabilities": [
@@ -17,14 +17,19 @@
       "Write",
       "Planning",
       "Lifecycle",
+      "Relations",
+      "Briefings",
       "Reports"
     ],
     "defaultPrompt": [
       "Set up Plane Workflow securely in this client.",
       "Configure strict planning defaults for this project using its available Plane IDs.",
       "Create a well-planned Plane task from this request.",
+      "Show me which Plane work items need attention today.",
+      "Mark one Plane work item as blocked by another.",
       "Start this planned Plane item now and record its actual start date.",
       "Complete this started Plane item with a factual summary and verification.",
+      "Cancel this Plane item and record the factual reason.",
       "Export this project's backlog and in-progress items as a PDF."
     ]
   },

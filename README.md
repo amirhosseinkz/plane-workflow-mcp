@@ -3,8 +3,8 @@
 Plane Workflow MCP is an open-source [Model Context Protocol
 (MCP)](https://modelcontextprotocol.io/) server for [Plane](https://plane.so/)
 project management. It lets Codex and other AI coding clients create, update,
-audit, and export Plane work items through configurable workflows, read-only
-reporting, and guarded write operations. The repository also contains an
+query, relate, audit, and export Plane work items through configurable
+workflows, read-only briefings, and guarded write operations. The repository also contains an
 optional Mattermost direct-message bot that uses the same workflow rules.
 
 Licensed under the [MIT License](LICENSE).
@@ -59,6 +59,21 @@ plane-workflow mcp
 profiles can be stored outside the repository with `PLANE_WORKFLOW_CONFIG`.
 Never commit API keys, private profile files, or generated reports.
 
+## Project visibility and dependencies
+
+Version 0.5.0 adds bounded-response, read-only work discovery. Use `list_work_items` for
+text, state, assignee, label, module, cycle, priority, date, and overdue filters.
+Use `get_project_briefing` for active-work totals and attention lists covering
+overdue, stale, unassigned, unestimated, and unscheduled work.
+
+Use `get_work_item_relations` to inspect dependencies. Relation direction is
+always from the source item: `blocking` means the source blocks the targets;
+`blocked_by` means the targets block the source. `add_work_item_relation`
+previews the change, validates same-project targets, and verifies Plane retained
+the requested relations after confirmation. Destructive relation removal is not
+exposed because supported Plane versions do not provide one consistent,
+unambiguous public removal contract.
+
 ## Planning lifecycle
 
 Version 0.4.0 adds a preview-first lifecycle for planning, starting, and
@@ -91,6 +106,7 @@ A generic strict planning override looks like this:
     "default_unstarted_state_id": "<unstarted-state-id>",
     "default_started_state_id": "<started-state-id>",
     "default_completed_state_id": "<completed-state-id>",
+    "default_cancelled_state_id": "<cancelled-state-id>",
     "timezone": "UTC",
     "business_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
     "complexity": {
@@ -117,6 +133,9 @@ The standard lifecycle is:
 4. Preview and apply `complete_standard_work_item` with a factual summary and
    verification that actually occurred. It records the completion comment
    before moving the item to a configured completed state.
+5. Preview and apply `cancel_standard_work_item` with a factual reason when work
+   should stop. It records the reason before moving to a configured cancelled
+   state, and generic updates cannot bypass this lifecycle.
 
 `complete_standard_work_item` can also record a Plane worklog when
 `actual_minutes` is known active work time. Omit it when the duration is not
@@ -245,9 +264,12 @@ fixtures, command output, screenshots, or reports.
    summary plus real verification, writes its comment before Done, and creates
    a worklog only when a known `actual_minutes` value is supplied. Retry any
    `completion_pending` result and confirm records are not duplicated.
-7. Confirm generic updates cannot bypass the completion lifecycle. Run a
-   read-only audit and export a sanitized DOCX or PDF report.
-8. Run the automated checks shown above and inspect the release diff to ensure
+7. Confirm generic updates cannot bypass completion or cancellation. Retry a
+   cancellation and confirm its factual comment is not duplicated.
+8. Run filtered work-item queries, inspect the project briefing, and preview and
+   apply a same-project blocker relation after reviewing its direction.
+9. Run a read-only audit and export a sanitized DOCX or PDF report.
+10. Run the automated checks shown above and inspect the release diff to ensure
    it contains no credentials, private IDs, generated reports, or unrelated
    artifacts.
 

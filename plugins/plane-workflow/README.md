@@ -12,6 +12,9 @@ It provides:
   dates;
 - preview-first start and completion operations with factual completion
   records;
+- filtered work-item queries and project execution briefings;
+- preview-first work-item dependency and relation creation;
+- preview-first cancellation with a factual, retry-safe record;
 - read-only work-item report exports; and
 - preview-first operations for changes to Plane work items.
 
@@ -80,7 +83,7 @@ They describe breadth, risk, dependencies, uncertainty, and verification
 effort; they do not represent actual elapsed time. Each value can map to a
 Plane estimate-point ID and `lead_business_days`.
 
-This generic strict override shows all v0.4.0 planning keys:
+This generic strict override shows the planning keys through v0.5.0:
 
 ```json
 {
@@ -91,6 +94,7 @@ This generic strict override shows all v0.4.0 planning keys:
     "default_unstarted_state_id": "<backlog-or-unstarted-state-id>",
     "default_started_state_id": "<started-state-id>",
     "default_completed_state_id": "<completed-state-id>",
+    "default_cancelled_state_id": "<cancelled-state-id>",
     "timezone": "UTC",
     "business_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
     "complexity": {
@@ -135,6 +139,9 @@ before applying it:
    occurred. Optional implementation notes and follow-ups must also be factual.
    It records the comment before changing to `default_completed_state_id` or an
    explicitly supplied completed state.
+5. `cancel_standard_work_item` records a factual reason before moving unfinished
+   work to `default_cancelled_state_id` or an explicitly supplied cancelled
+   state. Generic updates cannot bypass either completion or cancellation.
 
 Supply `actual_minutes` only when the positive whole number is known active
 implementation and verification time. The tool then records an optional Plane
@@ -147,7 +154,24 @@ worklog. If the tool returns `completion_pending`, report the failed stage,
 resolve the API problem, and retry the same completion rather than creating a
 manual duplicate record.
 
-## Practical testing for v0.3.0 through v0.4.0
+## Understand work and dependencies
+
+Use `get_project_briefing` for a read-only summary of active work and bounded
+attention lists for overdue, stale, unassigned, unestimated, and unscheduled
+items. Use `list_work_items` for explicit state, assignee, label, module, cycle,
+priority, date, text, and overdue filters. Module memberships are resolved from
+Plane's module endpoints when module filters are requested. Results expose `offset`, `returned`,
+and `has_more` so callers can page without receiving an unbounded response.
+
+Use `get_work_item_relations` to inspect blockers and related work. Use
+`add_work_item_relation` first as a preview and only confirm after checking its
+direction. In particular, `blocking` means the source item blocks each target,
+while `blocked_by` means each target blocks the source. v0.5 limits relation
+creation to validated items in the selected project and does not expose
+relation removal because Plane versions do not yet provide a consistent,
+unambiguous public removal contract.
+
+## Practical testing through v0.5.0
 
 Test against a disposable workspace and project with sanitized names and a
 least-privilege account.
@@ -178,9 +202,11 @@ least-privilege account.
    transition ordering. Retry a simulated `completion_pending` operation and
    confirm it does not duplicate the comment or worklog.
 8. Verify `update_standard_work_item` rejects a direct completed-state
-   transition. Run `audit_work_items` and a sanitized report export to retain
-   coverage of the read-only workflow features.
-9. Run the package checks:
+   transition and a direct cancelled-state transition. Preview and apply a
+   factual cancellation, then retry it and confirm its comment is not duplicated.
+9. Query a filtered work-item list, inspect the project briefing, and preview a
+   blocker relation in both directions before applying one in the disposable project.
+10. Run `audit_work_items`, export a sanitized report, and run the package checks:
 
 ```bash
 uv sync --locked

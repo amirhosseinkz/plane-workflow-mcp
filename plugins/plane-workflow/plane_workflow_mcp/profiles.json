@@ -21,6 +21,7 @@
     "planning": {
       "mode": "advisory",
       "default_labels": [],
+      "default_cancelled_state_id": null,
       "timezone": "UTC",
       "business_days": [
         "monday",
