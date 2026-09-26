@@ -5,6 +5,21 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Outcome-led quick start, sourced official-server comparison, client compatibility
+  matrix, and copyable task, completion, and briefing workflows.
+- Reproducible offline creation preview and a live-demo recording script.
+- Clean-install distribution smoke checks for the CLI, bundled profiles, and MCP
+  tool discovery.
+
+### Changed
+
+- Quick start installs the existing versioned GitHub wheel without cloning.
+- Successful guided setup explains project selection and suggests a read-only
+  first request.
+- Advanced setup, workflow, and release instructions moved into dedicated guides.
+
 ## [0.5.0] - 2026-09-04
 
 ### Added

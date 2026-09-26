@@ -1,288 +1,107 @@
 # Plane Workflow MCP
 
-Plane Workflow MCP is an open-source [Model Context Protocol
-(MCP)](https://modelcontextprotocol.io/) server for [Plane](https://plane.so/)
-project management. It lets Codex and other AI coding clients create, update,
-query, relate, audit, and export Plane work items through configurable
-workflows, read-only briefings, and guarded write operations. The repository also contains an
-optional Mattermost direct-message bot that uses the same workflow rules.
+**Keep Plane tasks in sync with your coding agent, using your team's workflow rules.**
 
-Licensed under the [MIT License](LICENSE).
+Turn a bug description into a structured work item, preview changes before applying
+them, and record verification when work is completed. An independent, open-source
+[MCP](https://modelcontextprotocol.io/) server for [Plane](https://plane.so/).
 
-## Requirements
+## From a bug report to a planned task
 
-- Python 3.11 or newer
-- [uv](https://docs.astral.sh/uv/)
-- Access to a Plane instance, workspace, and API key
-- One of Codex, OpenCode, or Zed when using the guided client setup
+> “Retrying checkout can create two orders. Draft a bug with acceptance criteria
+> in the selected project. Show the preview before writing anything.”
 
-## Install the standalone MCP server
+| Step | What happens |
+| --- | --- |
+| Draft | The agent reads the project's workflow and checks for similar work. |
+| Preview | You review the title, description, labels, and available planning fields. |
+| Apply | After your approval, the agent calls the write operation. |
+| Verify | The agent retrieves the created item and shows the result from Plane. |
 
-Until a package release is published, install from a clone of this repository.
+This is an illustrative walkthrough, not a recording or a claim of measured time
+saved. [Run the offline example or record the 45-second demo](docs/demo.md).
+
+## Three useful workflows
+
+- **Turn a bug into a reviewable task.** Include current behavior, expected behavior,
+  scope, and acceptance criteria; apply configured planning defaults.
+- **Close work with evidence.** Record a factual completion summary and verification
+  before moving a started item to Done.
+- **Find work that needs attention.** Get a read-only briefing of overdue, stale,
+  unassigned, unestimated, and unscheduled work.
+
+[Copy the prompts and expected results](docs/examples.md).
+
+## Quick start
+
+You need Python 3.11+, [uv](https://docs.astral.sh/uv/), a Plane workspace and API
+key, and a client that can run a local MCP server.
+
+Install the published **v0.5.0 GitHub release** without cloning:
 
 ```bash
-git clone https://github.com/amirhosseinkz/plane-workflow-mcp.git plane-workflow-mcp
-cd plane-workflow-mcp
-uv tool install ./plugins/plane-workflow
-```
-
-Run guided setup for a supported client:
-
-```bash
+uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.5.0/plane_workflow_mcp-0.5.0-py3-none-any.whl
 plane-workflow setup --client codex
-plane-workflow status
-```
-
-The setup command asks for the Plane base URL, workspace slug, and API key. It
-stores the API key in your operating-system keyring and writes only non-secret
-settings to the local configuration directory. It adds the MCP command to the
-selected client after showing the pending change.
-
-To configure OpenCode or Zed instead, pass `--client opencode` or
-`--client zed`. You can preview a setup without writing anything:
-
-```bash
-plane-workflow setup --client codex --dry-run
-```
-
-For CI or an ephemeral environment, provide credentials through environment
-variables instead of local setup:
-
-```bash
-export PLANE_BASE_URL="https://plane.example.test"
-export PLANE_WORKSPACE_SLUG="example-workspace"
-export PLANE_API_KEY="replace-with-a-secret-from-your-CI-store"
-plane-workflow mcp
-```
-
-`PLANE_WORKFLOW_HOME` changes the local settings directory. Advanced workflow
-profiles can be stored outside the repository with `PLANE_WORKFLOW_CONFIG`.
-Never commit API keys, private profile files, or generated reports.
-
-## Project visibility and dependencies
-
-Version 0.5.0 adds bounded-response, read-only work discovery. Use `list_work_items` for
-text, state, assignee, label, module, cycle, priority, date, and overdue filters.
-Use `get_project_briefing` for active-work totals and attention lists covering
-overdue, stale, unassigned, unestimated, and unscheduled work.
-
-Use `get_work_item_relations` to inspect dependencies. Relation direction is
-always from the source item: `blocking` means the source blocks the targets;
-`blocked_by` means the targets block the source. `add_work_item_relation`
-previews the change, validates same-project targets, and verifies Plane retained
-the requested relations after confirmation. Destructive relation removal is not
-exposed because supported Plane versions do not provide one consistent,
-unambiguous public removal contract.
-
-## Planning lifecycle
-
-Version 0.4.0 adds a preview-first lifecycle for planning, starting, and
-completing work. Project workflow profiles can use either planning mode:
-
-- `advisory` applies configured defaults when available but permits incomplete
-  planning data;
-- `strict` requires scope, a `tiny`, `small`, `medium`, or `large` complexity,
-  assignment, an unstarted state, an estimate mapping, and planned dates before
-  creation.
-
-Complexity is a planning judgment based on scope, risk, dependencies,
-uncertainty, and verification effort. It is not elapsed time. A profile can map
-each complexity to a Plane estimate-point ID, or a non-negative numeric point
-value on self-hosted servers without the estimate catalog, plus a positive
-number of lead business days. When complexity is supplied and dates are
-omitted, the server chooses the current or next configured business day for
-`start_date` and counts configured business days through `target_date`.
-
-Use `get_workflow_options` to obtain valid member, state, and available
-estimate-point IDs before configuring defaults. Labels are configured by name.
-A generic strict planning override looks like this:
-
-```json
-{
-  "planning": {
-    "mode": "strict",
-    "default_assignee_id": "<member-id>",
-    "default_labels": ["<existing-label-name>"],
-    "default_unstarted_state_id": "<unstarted-state-id>",
-    "default_started_state_id": "<started-state-id>",
-    "default_completed_state_id": "<completed-state-id>",
-    "default_cancelled_state_id": "<cancelled-state-id>",
-    "timezone": "UTC",
-    "business_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-    "complexity": {
-      "tiny": {"estimate": 1, "lead_business_days": 1},
-      "small": {"estimate": 2, "lead_business_days": 2},
-      "medium": {"estimate": 3, "lead_business_days": 4},
-      "large": {"estimate": 5, "lead_business_days": 7}
-    }
-  }
-}
-```
-
-Preview the override with `validate_workflow_profile`, then use
-`save_project_workflow_profile` first as a preview and only save it after
-review. Keep real IDs in the local profile location, not in repository examples
-or bug reports.
-
-The standard lifecycle is:
-
-1. Preview and create planned work with `create_standard_work_item`.
-2. Preview and apply `start_standard_work_item` when implementation actually
-   begins; it records the actual start date and a valid started state.
-3. Use `update_standard_work_item` for non-completion changes.
-4. Preview and apply `complete_standard_work_item` with a factual summary and
-   verification that actually occurred. It records the completion comment
-   before moving the item to a configured completed state.
-5. Preview and apply `cancel_standard_work_item` with a factual reason when work
-   should stop. It records the reason before moving to a configured cancelled
-   state, and generic updates cannot bypass this lifecycle.
-
-`complete_standard_work_item` can also record a Plane worklog when
-`actual_minutes` is known active work time. Omit it when the duration is not
-known. Never infer actual time from an estimate, fabricate human timing, or
-delay a completed transition to make activity appear more human.
-Set the planning `timezone` to the project's IANA timezone so generated and
-actual lifecycle dates follow the team's local calendar.
-
-## Workspaces and projects
-
-Configure each Plane workspace with a unique profile, then select the active
-workspace and project before creating or updating work items:
-
-```bash
-plane-workflow setup --profile client-a
-plane-workflow workspace list
-plane-workflow workspace activate client-a
 plane-workflow project list
-plane-workflow project activate <project-id>
+```
+
+Replace `PROJECT_ID` below with an ID from that list:
+
+```bash
+plane-workflow project activate PROJECT_ID
 plane-workflow status
 ```
 
-Each workspace profile retains its own active project. MCP clients can use
-`get_active_plane_context`, `list_configured_plane_workspaces`,
-`activate_plane_workspace`, `list_plane_projects`, and
-`activate_plane_project` for the same flow.
+Setup checks access to Plane, stores the API key in your OS keyring, and registers
+the server with the selected client. Use `--client opencode` or `--client zed`
+for their setup adapters. Restart your client after setup.
 
-When an active project is selected, work-item mutation tools use it by default
-and reject a conflicting `project_id`. They also confirm that a referenced work
-item belongs to the selected project, preventing accidental changes in the
-wrong project.
+For your first result, paste this into the client:
 
-## Install the Codex plugin
-
-The repository includes a Codex plugin marketplace entry:
-
-```bash
-codex plugin marketplace add https://github.com/amirhosseinkz/plane-workflow-mcp.git
-codex plugin add plane-workflow@plane-workflow-community
+```text
+Use Plane Workflow to confirm my active workspace and project, then show overdue
+and unassigned work in that project. Include item identifiers and totals. Do not
+change any Plane data. Tell me if a result list is truncated.
 ```
 
-Restart the client after installing a plugin. The standalone MCP installation
-above works independently of the plugin.
+An empty list is a valid result. If no project is selected, select one before
+retrying. [Installation, troubleshooting, and client compatibility](docs/installation.md).
 
-## Optional Mattermost bot
+The command above installs the released version; unreleased changes in this
+checkout require the [source installation](docs/installation.md#from-source).
+There is no PyPI release advertised yet.
 
-The optional bot is for a team that wants approved Mattermost users to manage
-Plane work items through direct messages. It is not installed with the MCP
-server or Codex plugin.
+## When to choose this or the official Plane MCP
 
-```bash
-cd plugins/plane-workflow/mattermost-bot
-uv sync --locked
-uv run python configure.py
-uv run python main.py --check
-uv run python main.py
-```
+Choose this server when you want configurable planning requirements, a structured
+completion record, and project-specific workflows. Choose the official server
+when you want broad Plane resource coverage or a hosted OAuth connection.
 
-The configuration helper should be given your own Mattermost URL, Plane URL,
-workspace, project, credentials, and allowlist. It writes local secrets to
-`.env`; do not commit that file or the bot's `data/` directory. The
-`launch_agent.py` helper installs a macOS background service. On other
-platforms, run the foreground command under your own process supervisor.
+| Need | Plane Workflow MCP | Official Plane MCP |
+| --- | --- | --- |
+| Team planning rules | Advisory or strict profiles for required planning fields | General resource operations; no equivalent profile policy documented in the reviewed README |
+| Review changes | Explicit `dry_run=true` previews for supported writes | Review/confirmation depends on the client; no equivalent preview workflow documented in the reviewed README |
+| Completion | Dedicated operation requires a started item, summary, and verification | Work-item updates, comments, and worklogs available as operations |
+| Reporting | Project attention briefings and DOCX/PDF exports | Work-item queries, counts, and grouping through PQL |
+| Connection | Local stdio, API key, guided setup | Local stdio or hosted HTTP with OAuth/API token |
 
-Every write is presented as a draft first. The bot should use a dedicated
-least-privilege Plane service account and a restrictive direct-message
-allowlist.
+Comparison checked against the [official README at a pinned revision](https://github.com/makeplane/plane-mcp-server/blob/beee888f24fc65229a41bc4e0ede20cf4bc59444/README.md)
+on September 27, 2026. “Not documented” does not mean impossible or unsupported.
 
-## Reports
+**Review is a client workflow, not a server-enforced approval gate.** Ask your
+agent to preview first and wait for your approval. Some write tools default to
+`dry_run=false`; the server does not prove a human approved a call. Configured
+planning requirements and lifecycle checks are enforced by the server. Tasks are
+updated when the agent calls tools; there is no background code-to-task sync.
 
-Ask the MCP client for a report in normal language, for example:
+## Documentation
 
-> Export this project's backlog and in-progress work items as a PDF, grouped by state.
+- [Installation and client compatibility](docs/installation.md)
+- [Workflow examples](docs/examples.md)
+- [Planning, lifecycle, dependencies, and reports](docs/workflows.md)
+- [Offline demo and recording script](docs/demo.md)
+- [Optional Mattermost bot](plugins/plane-workflow/mattermost-bot/README.md)
+- [Development](CONTRIBUTING.md) · [Release checks](docs/releasing.md)
+- [Support](SUPPORT.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
-The `export_work_items_report` tool produces `.docx` or `.pdf` reports. It
-reads Plane data but does not change it. Treat generated reports as potentially
-sensitive and store them outside the repository.
-
-## Development
-
-The core MCP server and optional bot have separate locked environments.
-
-```bash
-cd plugins/plane-workflow
-uv sync --locked
-uv lock --check
-uv run python -m unittest discover -s tests -v
-uv build
-```
-
-```bash
-cd plugins/plane-workflow/mattermost-bot
-uv sync --locked
-uv lock --check
-uv run python -m unittest discover -s tests -v
-```
-
-The GitHub Actions workflow runs these checks for every pull request. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations, the
-[security policy](SECURITY.md) for private vulnerability reporting, and
-[SUPPORT.md](SUPPORT.md) for help channels.
-
-## Practical release testing
-
-Use a disposable Plane workspace and project, generic test data, and a
-least-privilege account. Do not put credentials or real organization IDs in
-fixtures, command output, screenshots, or reports.
-
-1. Run `plane-workflow setup --client <client> --dry-run`, complete setup, and
-   verify `plane-workflow status` without exposing the API key.
-2. Exercise the v0.3.x context flow: configure two workspace profiles, switch
-   with `workspace activate`, select a project with `project activate`, and
-   confirm each workspace retains its selected project. Repeat through the MCP
-   workspace/project list and activation tools.
-3. In a disposable second project, verify a mutation with a conflicting
-   `project_id` is rejected and an item from the wrong project is not changed.
-4. Run `diagnose_plane_connection`, `get_project_workflow_context`, and
-   `get_workflow_options`; confirm capabilities and IDs reflect the selected
-   project. Preview profile validation and saving before persisting an override.
-5. In `advisory` mode, preview creation with partial planning data. In `strict`
-   mode, confirm incomplete planning is rejected, then preview all four
-   complexity values and verify configured defaults, estimate-point IDs, and
-   business-day dates.
-6. In the disposable project, preview and apply creation, start, and completion.
-   Confirm start records the real start date; completion requires a factual
-   summary plus real verification, writes its comment before Done, and creates
-   a worklog only when a known `actual_minutes` value is supplied. Retry any
-   `completion_pending` result and confirm records are not duplicated.
-7. Confirm generic updates cannot bypass completion or cancellation. Retry a
-   cancellation and confirm its factual comment is not duplicated.
-8. Run filtered work-item queries, inspect the project briefing, and preview and
-   apply a same-project blocker relation after reviewing its direction.
-9. Run a read-only audit and export a sanitized DOCX or PDF report.
-10. Run the automated checks shown above and inspect the release diff to ensure
-   it contains no credentials, private IDs, generated reports, or unrelated
-   artifacts.
-
-## Publishing checklist
-
-Before making a release, maintainers should:
-
-1. Confirm the MIT license remains appropriate for the intended distribution.
-2. Confirm GitHub repository metadata, marketplace name, and package project
-   URLs match the release destination.
-3. Enable GitHub private vulnerability reporting and configure repository
-   discussions or support channels.
-4. Verify that no organization-specific endpoints, project identifiers,
-   reports, credentials, local profiles, or generated artifacts are present in
-   the files or Git history being published.
-5. Create a tagged release only after CI is green.
+MIT licensed. Community project; not affiliated with Plane.

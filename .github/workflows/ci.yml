@@ -76,3 +76,6 @@ jobs:
       - name: Build source and wheel distributions
         working-directory: plugins/plane-workflow
         run: uv build --out-dir "${RUNNER_TEMP}/plane-workflow-dist"
+
+      - name: Verify clean distribution installation and MCP discovery
+        run: python scripts/smoke_distribution.py "${RUNNER_TEMP}/plane-workflow-dist"

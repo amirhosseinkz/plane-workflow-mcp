@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +20,7 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(payload["mcp"]["plane-workflow"], {"type": "local", "command": ["plane-workflow", "mcp"], "enabled": True})
             self.assertNotIn("PLANE_API_KEY", path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["model"], "test")
             self.assertTrue(path.with_suffix(".json.plane-workflow-backup").exists())
 
     def test_zed_setup_writes_context_server(self) -> None:
@@ -42,3 +44,21 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main([]), 2)
         rendered = "".join(str(call.args[0]) for call in output.write.call_args_list if call.args)
         self.assertIn("plane-workflow setup", rendered)
+
+    def test_codex_setup_registers_without_credentials(self) -> None:
+        from unittest.mock import Mock
+
+        for exists in (False, True):
+            with self.subTest(exists=exists):
+                runner = Mock(side_effect=[
+                    subprocess.CompletedProcess([], 0 if exists else 1, "", ""),
+                    *([subprocess.CompletedProcess([], 0, "", "")] if exists else []),
+                    subprocess.CompletedProcess([], 0, "", ""),
+                ])
+                cli._install_codex(runner=runner)
+                commands = [call.args[0] for call in runner.call_args_list]
+                expected = [["codex", "mcp", "get", "plane-workflow"]]
+                if exists:
+                    expected.append(["codex", "mcp", "remove", "plane-workflow"])
+                expected.append(["codex", "mcp", "add", "plane-workflow", "--", "plane-workflow", "mcp"])
+                self.assertEqual(commands, expected)

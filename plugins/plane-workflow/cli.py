@@ -273,6 +273,10 @@ def command_setup(arguments: argparse.Namespace) -> int:
     else:
         configured = _install_json_client(client, _opencode_config_path(arguments.config_file) if client == "opencode" else _zed_settings_path(arguments.config_file), dry_run=arguments.dry_run)
     print(f"Plane Workflow is configured for {client}. Settings: {profile_path}. Client: {configured}.")
+    print("Next: run plane-workflow project list, then plane-workflow project activate PROJECT_ID.")
+    print(f"Restart {client}, then ask:")
+    print('"Confirm my active Plane workspace and project, then show overdue and unassigned work. '
+          'Include item identifiers and totals, flag truncated lists, and do not change Plane data."')
     return 0
 
 
