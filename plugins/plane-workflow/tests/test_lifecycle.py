@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import requests
-import server
+from plane_workflow_mcp import server
 
 
 PROJECT_ID = "project-id"

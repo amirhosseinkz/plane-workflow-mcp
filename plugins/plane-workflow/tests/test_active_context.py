@@ -5,8 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import configuration
-import server
+from plane_workflow_mcp import configuration
+from plane_workflow_mcp import server
 
 
 class _Keyring:

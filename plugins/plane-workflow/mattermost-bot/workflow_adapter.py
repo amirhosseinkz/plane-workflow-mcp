@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 # Provided by the declared editable ``plane-workflow-mcp`` dependency.
-import server as workflow
+from plane_workflow_mcp import server as workflow
 
 from config import BotConfig
 

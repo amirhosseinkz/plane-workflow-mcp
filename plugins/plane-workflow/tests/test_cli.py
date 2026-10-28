@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import cli
+from plane_workflow_mcp import cli
 
 
 class CliTests(unittest.TestCase):

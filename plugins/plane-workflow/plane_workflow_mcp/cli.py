@@ -12,8 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-import configuration
-import server
+from . import configuration, server
 
 
 CLIENTS = ("claude-code", "codex", "claude-desktop", "cursor", "opencode", "zed")

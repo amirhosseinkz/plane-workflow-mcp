@@ -14,7 +14,7 @@ CORE = ROOT / "plugins" / "plane-workflow"
 sys.path.insert(0, str(CORE))
 sys.path.insert(0, str(CORE / "tests"))
 
-import server
+from plane_workflow_mcp import server
 from test_lifecycle import PROJECT_ID, _Api, _profile
 
 
