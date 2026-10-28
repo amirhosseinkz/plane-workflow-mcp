@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.amirhosseinkz/plane-workflow-mcp",
+  "title": "Plane Workflow",
+  "description": "Plan, start, and complete Plane work items under team rules, with previews and idempotent writes.",
+  "repository": {
+    "url": "https://github.com/amirhosseinkz/plane-workflow-mcp",
+    "source": "github",
+    "subfolder": "plugins/plane-workflow"
+  },
+  "version": "0.6.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "plane-workflow-mcp",
+      "version": "0.6.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

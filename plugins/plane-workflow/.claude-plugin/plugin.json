@@ -1,7 +1,7 @@
 {
   "name": "plane-workflow",
   "displayName": "Plane Workflow",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Plan, start, and complete Plane work items under your team's rules, with previews, idempotent writes, project briefings, and completion records.",
   "author": {
     "name": "Plane Workflow Contributors"

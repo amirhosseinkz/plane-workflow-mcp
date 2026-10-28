@@ -38,3 +38,42 @@ jobs:
 
       - name: Upload with trusted publishing
         run: uv publish --trusted-publishing always dist/*
+
+      - name: Check registry metadata matches the package version
+        run: |
+          package_version=$(python -c "import tomllib; print(tomllib.load(open('plugins/plane-workflow/pyproject.toml','rb'))['project']['version'])")
+          python - "$package_version" <<'PY'
+          import json, sys
+          server = json.load(open("server.json"))
+          versions = {server["version"], *(package["version"] for package in server["packages"])}
+          if versions != {sys.argv[1]}:
+              raise SystemExit(f"server.json versions {sorted(versions)} do not match {sys.argv[1]}")
+          PY
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Install mcp-publisher
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.6
+        run: |
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl -fsSL -o "$archive" "$base/$archive"
+          curl -fsSL -o "$archive.sigstore.json" "$base/$archive.sigstore.json"
+          cosign verify-blob "$archive" \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          tar -xzf "$archive" mcp-publisher
+          rm "$archive" "$archive.sigstore.json"
+
+      - name: Publish to the MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          # PyPI can take a moment to serve the README that carries the mcp-name marker.
+          for attempt in 1 2 3 4 5; do
+            ./mcp-publisher publish && exit 0
+            sleep 30
+          done
+          exit 1
