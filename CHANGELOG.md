@@ -20,6 +20,8 @@ uses [Semantic Versioning](https://semver.org/).
 - `idempotency_key` on `create_standard_work_item`. Creates carry a stable
   `external_id`, so a retry after a timeout or conflict returns the existing item
   (`already_created`) instead of creating a duplicate.
+- `plane-workflow --version`, and `plane-workflow status` reports the installed
+  version and, when a newer GitHub release exists, the command to update.
 - `confirm_project_identifier` on project-scoped write tools changes a non-active
   project for one call when it matches that project's identifier; the active
   project is unchanged.

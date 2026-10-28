@@ -53,6 +53,19 @@ plane-workflow mcp
 profiles can be stored outside the repository with `PLANE_WORKFLOW_CONFIG`.
 Never commit API keys, private profile files, or generated reports.
 
+## Update
+
+```bash
+plane-workflow --version
+plane-workflow status
+```
+
+`status` asks GitHub for the latest release. The request uses a three-second timeout
+and sends no Plane data. If a newer version exists, `update_available.update_command`
+holds the install command, for example
+`uv tool install --force <wheel URL of the new release>`. Restart the client afterwards.
+Set `PLANE_WORKFLOW_NO_UPDATE_CHECK=1` to skip the lookup.
+
 ## Workspaces and projects
 
 Configure each Plane workspace with a unique profile, then select the active

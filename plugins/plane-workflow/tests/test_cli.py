@@ -94,3 +94,29 @@ class CliTests(unittest.TestCase):
                 self.assertIn("other", payload["mcpServers"])
                 self.assertTrue(cli._remove_json_client(client, path))
                 self.assertNotIn("plane-workflow", json.loads(path.read_text(encoding="utf-8"))["mcpServers"])
+
+    def test_update_check_reports_a_newer_release_with_its_wheel(self) -> None:
+        from types import SimpleNamespace
+
+        release = {
+            "tag_name": "v0.7.0",
+            "html_url": "https://github.com/example/releases/v0.7.0",
+            "assets": [{"name": "plane_workflow_mcp-0.7.0-py3-none-any.whl", "browser_download_url": "https://downloads.example.test/x.whl"}],
+        }
+        get = lambda *args, **kwargs: SimpleNamespace(ok=True, json=lambda: release)
+        with patch.dict("os.environ", {}, clear=False):
+            cli.os.environ.pop("PLANE_WORKFLOW_NO_UPDATE_CHECK", None)
+            update = cli.check_for_update("0.6.0", get=get)
+            self.assertEqual(update["latest_version"], "0.7.0")
+            self.assertEqual(update["update_command"], "uv tool install --force https://downloads.example.test/x.whl")
+            self.assertIsNone(cli.check_for_update("0.7.0", get=get))
+            self.assertIsNone(cli.check_for_update("0.10.0", get=get))
+
+    def test_update_check_is_silent_offline_or_when_disabled(self) -> None:
+        def offline(*args: object, **kwargs: object) -> object:
+            raise cli.server.requests.ConnectionError("offline")
+
+        self.assertIsNone(cli.check_for_update("0.6.0", get=offline))
+        with patch.dict("os.environ", {"PLANE_WORKFLOW_NO_UPDATE_CHECK": "1"}):
+            self.assertIsNone(cli.check_for_update("0.6.0", get=lambda *a, **k: AssertionError("must not call")))
+
