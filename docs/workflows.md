@@ -87,6 +87,26 @@ delay a completed transition to make activity appear more human.
 Set the planning `timezone` to the project's IANA timezone so generated and
 actual lifecycle dates follow the team's local calendar.
 
+## Batch work, retries, and other projects
+
+- **Rate limits.** Requests that Plane answers with HTTP 429 are retried with backoff
+  (honoring `Retry-After`). If the limit persists, the error says so; it is never
+  reported as a missing work item.
+- **Safe retries.** Each create sends a stable `external_id` built from the project,
+  title, and optional `idempotency_key`. If a create times out or conflicts, retrying
+  it returns `already_created` with the existing item. Pass a distinct
+  `idempotency_key` with `allow_duplicate=true` to create separate items that share
+  a title.
+- **Duplicate checks in batches.** Creation reuses one project listing for two
+  minutes. An item someone else created with the same title inside that window may
+  not be flagged.
+- **Another project for one call.** Write tools reject a `project_id` that is not the
+  active project. To change another project without switching, also pass
+  `confirm_project_identifier` with that project's identifier (for example `WEB`).
+- **Completion dates.** Plane records `completed_at` when the item moves to Done, so
+  it is always the time of the completion call. Back-filled work keeps its real dates
+  in `start_date`, `target_date`, and the completion comment.
+
 ## Reports
 
 Ask the MCP client for a report in normal language, for example:

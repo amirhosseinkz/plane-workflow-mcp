@@ -13,12 +13,33 @@ uses [Semantic Versioning](https://semver.org/).
 - Clean-install distribution smoke checks for the CLI, bundled profiles, and MCP
   tool discovery.
 
+- Guided setup for Claude Code (`--client claude-code`, user scope), Cursor, and
+  Claude Desktop. Clients launched from a desktop app get the absolute launcher path.
+- `idempotency_key` on `create_standard_work_item`. Creates carry a stable
+  `external_id`, so a retry after a timeout or conflict returns the existing item
+  (`already_created`) instead of creating a duplicate.
+- `confirm_project_identifier` on project-scoped write tools changes a non-active
+  project for one call when it matches that project's identifier; the active
+  project is unchanged.
+
 ### Changed
 
+- Plane requests retry HTTP 429 (honoring `Retry-After`) and, for reads, 502/503/504
+  and network errors with exponential backoff. Writes that get no response are not
+  resent and are reported as possibly applied.
+- Creation reuses one project work-item listing for two minutes for duplicate
+  checks, instead of paging the whole project on every create.
 - Quick start installs the existing versioned GitHub wheel without cloning.
 - Successful guided setup explains project selection and suggests a read-only
   first request.
 - Advanced setup, workflow, and release instructions moved into dedicated guides.
+
+### Fixed
+
+- Rate-limit, server, and network failures are no longer reported as "work item
+  was not found in project"; only HTTP 404 gets that explanation.
+- Setting an estimate on a project without estimate points returns an actionable
+  error instead of a bare HTTP 400.
 
 ## [0.5.0] - 2026-09-04
 

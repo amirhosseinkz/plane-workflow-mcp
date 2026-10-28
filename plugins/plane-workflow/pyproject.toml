@@ -7,13 +7,17 @@ requires-python = ">=3.11"
 authors = [{ name = "Plane Workflow Contributors" }]
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["mcp", "plane", "workflow"]
+keywords = ["mcp", "model-context-protocol", "plane", "plane-so", "project-management", "workflow", "claude-code", "codex", "ai-agents"]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development",
 ]
 dependencies = [
@@ -31,6 +35,8 @@ dependencies = [
 Homepage = "https://github.com/amirhosseinkz/plane-workflow-mcp"
 Repository = "https://github.com/amirhosseinkz/plane-workflow-mcp"
 Issues = "https://github.com/amirhosseinkz/plane-workflow-mcp/issues"
+Changelog = "https://github.com/amirhosseinkz/plane-workflow-mcp/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/amirhosseinkz/plane-workflow-mcp/tree/main/docs"
 
 [project.scripts]
 plane-workflow = "cli:main"

@@ -5,7 +5,8 @@
 - Python 3.11 or newer
 - [uv](https://docs.astral.sh/uv/)
 - Access to a Plane instance, workspace, and API key
-- One of Codex, OpenCode, or Zed when using the guided client setup
+- One of Claude Code, Codex, Cursor, Claude Desktop, OpenCode, or Zed when using
+  the guided client setup
 
 ## From source
 
@@ -30,8 +31,9 @@ stores the API key in your operating-system keyring and writes only non-secret
 settings to the local configuration directory. It adds the MCP command to the
 selected client after showing the pending change.
 
-To configure OpenCode or Zed instead, pass `--client opencode` or
-`--client zed`. You can preview a setup without writing anything:
+Other clients: `--client claude-code` (registers with `claude mcp add --scope user`),
+`--client cursor` (`~/.cursor/mcp.json`), `--client claude-desktop`
+(`claude_desktop_config.json`), `--client opencode`, or `--client zed`. You can preview a setup without writing anything:
 
 ```bash
 plane-workflow setup --client codex --dry-run
@@ -121,6 +123,9 @@ CLI invocation. A live client-to-Plane session is a separate check.
 
 | Client | Setup | Evidence in this repository | Live verification |
 | --- | --- | --- | --- |
+| Claude Code | `plane-workflow setup --client claude-code` | Mocked `claude mcp` registration test | Manual `claude mcp add` registration used in daily work; adapter not yet verified live |
+| Cursor | `plane-workflow setup --client cursor` | `mcpServers` merge and removal test | Not verified |
+| Claude Desktop | `plane-workflow setup --client claude-desktop` | `mcpServers` merge and removal test | Not verified |
 | Codex | `plane-workflow setup --client codex` | Mocked `codex mcp` registration and replacement tests | Not verified for this documentation update |
 | OpenCode | `plane-workflow setup --client opencode` | JSONC merge, backup, secret-free entry tests | Not verified for this documentation update |
 | Zed | `plane-workflow setup --client zed` | Local context-server configuration test | Not verified for this documentation update |
@@ -132,7 +137,8 @@ executable path reported by `command -v plane-workflow` (PowerShell:
 `(Get-Command plane-workflow).Source`). No API key belongs in the client command.
 The OS user launching the server must have access to the configured keyring.
 
-For OpenCode or Zed, `--config-file PATH` overrides the settings path. Setup
+For JSON-configured clients (Cursor, Claude Desktop, OpenCode, Zed), `--config-file PATH`
+overrides the settings path. Setup
 preserves other JSON values and creates an initial `.plane-workflow-backup`;
 comments are removed when JSONC is rewritten. Codex setup requires its CLI on PATH.
 

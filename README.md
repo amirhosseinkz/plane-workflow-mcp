@@ -41,7 +41,7 @@ Install the published **v0.5.0 GitHub release** without cloning:
 
 ```bash
 uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.5.0/plane_workflow_mcp-0.5.0-py3-none-any.whl
-plane-workflow setup --client codex
+plane-workflow setup --client claude-code
 plane-workflow project list
 ```
 
@@ -53,8 +53,9 @@ plane-workflow status
 ```
 
 Setup checks access to Plane, stores the API key in your OS keyring, and registers
-the server with the selected client. Use `--client opencode` or `--client zed`
-for their setup adapters. Restart your client after setup.
+the server with the selected client. Use `--client codex`, `cursor`,
+`claude-desktop`, `opencode`, or `zed` for other clients. Restart your client
+after setup.
 
 For your first result, paste this into the client:
 
