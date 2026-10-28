@@ -35,6 +35,7 @@ ALLOWED_HOSTS = {
     "modelcontextprotocol.io",
     "opencode.ai",
     "plane.so",
+    "pypi.org",
     "docs.astral.sh",
     "semver.org",
 }

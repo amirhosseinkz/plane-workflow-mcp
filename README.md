@@ -37,10 +37,10 @@ saved. [Run the offline example or record the 45-second demo](docs/demo.md).
 You need Python 3.11+, [uv](https://docs.astral.sh/uv/), a Plane workspace and API
 key, and a client that can run a local MCP server.
 
-Install the published **v0.5.0 GitHub release** without cloning:
+Install the published **v0.6.0 GitHub release** without cloning:
 
 ```bash
-uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.5.0/plane_workflow_mcp-0.5.0-py3-none-any.whl
+uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.6.0/plane_workflow_mcp-0.6.0-py3-none-any.whl
 plane-workflow setup --client claude-code
 plane-workflow project list
 ```

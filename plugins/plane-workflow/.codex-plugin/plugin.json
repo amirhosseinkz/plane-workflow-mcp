@@ -1,6 +1,6 @@
 {
   "name": "plane-workflow",
-  "version": "0.5.0+codex.20260904010000",
+  "version": "0.6.0+codex.20261028000000",
   "description": "Configurable Plane planning, project briefings, work-item relations, lifecycles, and report exports for Codex.",
   "author": {
     "name": "Plane Workflow Contributors"

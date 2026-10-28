@@ -10,21 +10,21 @@ Requires Python 3.11+, uv, and a Plane workspace with an API key.
 Install the published GitHub release without cloning:
 
 ```bash
-uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.5.0/plane_workflow_mcp-0.5.0-py3-none-any.whl
-plane-workflow setup --client codex
+uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.6.0/plane_workflow_mcp-0.6.0-py3-none-any.whl
+plane-workflow setup --client claude-code
 plane-workflow project list
 plane-workflow project activate PROJECT_ID
 plane-workflow status
 ```
 
-Replace `PROJECT_ID` with a listed ID. Setup also has `--client opencode` and
-`--client zed` adapters. Restart the client, then ask:
+Replace `PROJECT_ID` with a listed ID. Setup also has `--client codex`, `cursor`,
+`claude-desktop`, `opencode`, and `zed` adapters. Restart the client, then ask:
 
 > Confirm my active Plane workspace and project, then show overdue and unassigned
 > work. Include identifiers and totals, flag truncated lists, and do not change
 > Plane data.
 
-The release command installs v0.5.0. To use an unreleased checkout, run
+The release command installs v0.6.0. To use an unreleased checkout, run
 `uv tool install ./plugins/plane-workflow` from the repository root instead.
 No PyPI release is advertised yet.
 
