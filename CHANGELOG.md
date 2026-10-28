@@ -5,6 +5,21 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-28
+
+### Added
+
+- Backfill Plane from git history. `plan_git_backfill` reads `git log`, groups commits
+  into work items, and dates them on the project's business days without writing
+  anything. `apply_git_backfill` previews, then creates, starts, and completes each
+  item with a completion comment that cites its commits. Uncommitted work is only
+  started. Re-runs resume without duplicates. Also available as `plane-workflow backfill`.
+
+### Changed
+
+- When an `idempotency_key` is given, the creation `external_id` depends only on the
+  project and the key, so a retry with a changed title still returns the first item.
+
 ## [0.6.1] - 2026-10-28
 
 ### Added

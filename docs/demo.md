@@ -17,7 +17,18 @@ strict planning defaults, acceptance criteria, and a preview with no writes.
 start and Monday target to demonstrate the fixture's two-business-day mapping.
 It is a code demonstration, not a live integration test or a client recording.
 
-## Regenerate the README animation
+## Regenerate the README animations
+
+`docs/demo-backfill.gif` comes from `scripts/demo_backfill_walkthrough.py`. It builds a
+synthetic git repository with four dated commits. It then runs the real
+`plan_git_backfill` and `apply_git_backfill` against the offline fixture: plan, rename
+one item, apply, and run again to show that nothing is duplicated.
+
+```bash
+uv run --locked --project plugins/plane-workflow --with pillow python scripts/render_demo_gif.py docs/demo-backfill.gif --walkthrough backfill
+```
+
+### The create-flow animation
 
 `docs/demo.gif` is rendered from `scripts/demo_walkthrough.py`, which calls the real
 `create_standard_work_item` against the same offline fixture. It shows a preview, a

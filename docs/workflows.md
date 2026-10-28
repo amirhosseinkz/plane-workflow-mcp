@@ -87,6 +87,50 @@ delay a completed transition to make activity appear more human.
 Set the planning `timezone` to the project's IANA timezone so generated and
 actual lifecycle dates follow the team's local calendar.
 
+## Backfill from git history
+
+`plan_git_backfill(repo_path, since, until=None, author=None, include_uncommitted=False, module_map=None, max_gap_days=3)`
+is read-only. It runs `git log` locally and groups commits in this order:
+
+1. `module_map` path prefix, for example `{"apps/web/": "Web"}`.
+2. Conventional-commit scope, for example `feat(auth): ...` goes to `auth`.
+3. Top-level folder.
+
+A group is split into separate items when work pauses longer than `max_gap_days`.
+
+Each item gets:
+
+- **Type:** `fix` commits make a Bug, and `feat`, `perf`, and `refactor` make an
+  Improvement. Anything else is a Task.
+- **Complexity:** set from the number of changed lines.
+- **Dates:** the first and last commit dates, moved onto the project's business days.
+
+The plan marks items that are already in Plane and lists similar existing titles. It is
+saved locally for 24 hours.
+
+`apply_git_backfill(plan_id, titles=None, modules=None, skip=None, allow_create_modules=False, dry_run=True)`
+previews by default. With `dry_run=false`, each committed item is created, then started
+on its first commit date. It is then completed with a comment that lists its commits
+and says that no tests were run as part of the backfill. Uncommitted work
+(`include_uncommitted=true`) is only started.
+
+**Idempotency.** Each item's `external_id` comes from its first commit. Re-running a
+plan, even after renaming items, never creates duplicates. A failure stops the run,
+and running the same call again resumes from where it stopped.
+
+**Completion dates.** Plane sets `completed_at` to the moment of the call. The
+historical dates are kept in `start_date`, `target_date`, and the completion comment.
+
+From a terminal:
+
+```bash
+plane-workflow backfill --since 2026-09-01 --module apps/web/=Web
+plane-workflow backfill --since 2026-09-01 --module apps/web/=Web --apply --create-modules
+```
+
+The first command only prints the plan. The second asks for confirmation before
+writing to Plane.
+
 ## Batch work, retries, and other projects
 
 - **Rate limits.** Requests that Plane answers with HTTP 429 are retried with backoff

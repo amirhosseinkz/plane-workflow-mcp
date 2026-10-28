@@ -1,6 +1,6 @@
 {
   "name": "plane-workflow",
-  "version": "0.6.1+codex.20261028120000",
+  "version": "0.7.0+codex.20261028180000",
   "description": "Configurable Plane planning, project briefings, work-item relations, lifecycles, and report exports for Codex.",
   "author": {
     "name": "Plane Workflow Contributors"
@@ -19,9 +19,11 @@
       "Lifecycle",
       "Relations",
       "Briefings",
-      "Reports"
+      "Reports",
+      "Git backfill"
     ],
     "defaultPrompt": [
+      "Backfill Plane from this repository's git history since last month, previewing the plan first.",
       "Set up Plane Workflow securely in this client.",
       "Configure strict planning defaults for this project using its available Plane IDs.",
       "Create a well-planned Plane task from this request.",
