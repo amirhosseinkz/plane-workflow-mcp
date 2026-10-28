@@ -55,3 +55,14 @@ any configuration or migration impact. Before requesting review:
 Use the repository issue forms for reproducible bugs and focused feature
 requests. Security vulnerabilities must follow [SECURITY.md](SECURITY.md), not
 the public issue tracker.
+
+## Distribution and documentation checks
+
+Run `python scripts/smoke_distribution.py dist` after building with
+`uv build --project plugins/plane-workflow --out-dir dist` from the repository root.
+This checks installation outside the source tree and actual stdio tool discovery.
+Run the [offline demo](docs/demo.md) when changing creation previews and refresh
+its sample output if necessary. Keep compatibility claims scoped to the checks
+actually performed. See [release instructions](docs/releasing.md).
+
+For user trials and launch measurement, see the [adoption plan](docs/adoption.md).

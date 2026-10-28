@@ -7,7 +7,7 @@ from pathlib import Path
 from docx import Document
 from pypdf import PdfReader
 
-import reports
+from plane_workflow_mcp import reports
 
 
 class _Api:

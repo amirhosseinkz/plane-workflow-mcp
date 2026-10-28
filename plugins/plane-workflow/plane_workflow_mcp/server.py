@@ -9,8 +9,10 @@ import importlib.resources
 import json
 import mimetypes
 import os
+import random
 import re
 import sys
+import time
 import tomllib
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -25,7 +27,7 @@ import requests
 from fastmcp import FastMCP
 from pydantic import Field
 
-from configuration import (
+from .configuration import (
     ConfigurationError,
     StoredPlaneProject,
     activate_stored_plane_profile,
@@ -54,11 +56,38 @@ VALID_RELATION_TYPES = {
 }
 WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
 NonNegativeInt = Annotated[int, Field(ge=0)]
+ConfirmProjectIdentifier = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Only to target a project other than the active one: the target project's identifier "
+            "(for example WEB). The call is rejected unless it matches project_id."
+        )
+    ),
+]
+REQUEST_TIMEOUT_SECONDS = 30
+MAX_REQUEST_ATTEMPTS = 5
+MAX_NETWORK_ATTEMPTS = 2
+MAX_RETRY_DELAY_SECONDS = 30.0
+RETRYABLE_GET_STATUSES = {502, 503, 504}
+WORK_ITEM_CACHE_SECONDS = 120.0
+EXTERNAL_SOURCE = "plane-workflow"
+_WORK_ITEM_CACHE: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}
 PositiveInt = Annotated[int, Field(ge=1)]
 
 
 class PlaneWorkflowError(RuntimeError):
     """A safe error suitable for returning through MCP."""
+
+
+class PlaneApiError(PlaneWorkflowError):
+    """A Plane API failure that keeps the HTTP status for callers that react to it."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, payload: Any = None, outcome_unknown: bool = False) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.payload = payload
+        self.outcome_unknown = outcome_unknown
 
 
 def _safe_api_detail(payload: Any) -> str:
@@ -345,6 +374,7 @@ class PlaneApi:
         self.workspace = settings.workspace
         self.profile = settings.profile
         self.session = requests.Session()
+        self.sleep = time.sleep
         self.session.headers.update({"X-API-Key": settings.api_key, "Accept": "application/json"})
 
     def request(
@@ -357,10 +387,30 @@ class PlaneApi:
     ) -> Any:
         normalized_path = path.strip("/")
         url = f"{self.base_url}/api/v1/workspaces/{self.workspace}/{normalized_path}/"
-        try:
-            response = self.session.request(method, url, params=params, json=payload, timeout=30)
-        except requests.RequestException as error:
-            raise PlaneWorkflowError("Plane API request failed before a response was received.") from error
+        is_read = method.upper() == "GET"
+        for attempt in range(1, MAX_REQUEST_ATTEMPTS + 1):
+            last_attempt = attempt == MAX_REQUEST_ATTEMPTS
+            try:
+                response = self.session.request(method, url, params=params, json=payload, timeout=REQUEST_TIMEOUT_SECONDS)
+            except requests.RequestException as error:
+                if is_read and attempt < MAX_NETWORK_ATTEMPTS:
+                    self._wait_before_retry(attempt, None)
+                    continue
+                if is_read:
+                    raise PlaneApiError("Plane API request failed before a response was received.") from error
+                # The write may have reached Plane even though no response arrived.
+                raise PlaneApiError(
+                    "Plane did not respond to a write request; the change may or may not have been applied. "
+                    "Check Plane before retrying.",
+                    outcome_unknown=True,
+                ) from error
+            # 429 means Plane refused the request, so any method is safe to send again.
+            status_code = getattr(response, "status_code", None)
+            retryable = status_code == 429 or (is_read and status_code in RETRYABLE_GET_STATUSES)
+            if retryable and not last_attempt:
+                self._wait_before_retry(attempt, response.headers.get("Retry-After"))
+                continue
+            break
         if not response.ok:
             try:
                 error_payload = response.json()
@@ -368,13 +418,29 @@ class PlaneApi:
                 error_payload = None
             detail = _safe_api_detail(error_payload)
             suffix = f": {detail}" if detail else ""
-            raise PlaneWorkflowError(f"Plane API request failed with HTTP {response.status_code}{suffix}.")
+            hint = " Plane rate limit was still exceeded after retries; wait a minute and try again." if response.status_code == 429 else ""
+            raise PlaneApiError(
+                f"Plane API request failed with HTTP {response.status_code}{suffix}.{hint}",
+                status_code=response.status_code,
+                payload=error_payload,
+            )
         if not response.content:
             return None
         try:
             return response.json()
         except ValueError as error:
             raise PlaneWorkflowError("Plane API returned an invalid JSON response.") from error
+
+    def _wait_before_retry(self, attempt: int, retry_after: str | None) -> None:
+        delay: float | None = None
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except ValueError:
+                delay = None
+        if delay is None:
+            delay = 2 ** (attempt - 1) + random.uniform(0, 0.5)
+        self.sleep(min(max(delay, 0.0), MAX_RETRY_DELAY_SECONDS))
 
     def project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"projects/{project_id}")
@@ -639,7 +705,13 @@ def _active_project(api: PlaneApi) -> StoredPlaneProject | None:
     return stored.active_project
 
 
-def _project_id(api: PlaneApi, project_id: str | None, *, enforce_active: bool = False) -> str:
+def _project_id(
+    api: PlaneApi,
+    project_id: str | None,
+    *,
+    enforce_active: bool = False,
+    confirm_project_identifier: str | None = None,
+) -> str:
     selected = _text(project_id)
     active_project = _active_project(api)
     if not selected:
@@ -649,10 +721,21 @@ def _project_id(api: PlaneApi, project_id: str | None, *, enforce_active: bool =
             )
         return active_project.id
     if enforce_active and active_project is not None and selected != active_project.id:
+        confirmation = _text(confirm_project_identifier)
+        if confirmation:
+            target = api.project(selected)
+            identifier = _text(str(target.get("identifier") or "")) if isinstance(target, dict) else ""
+            if identifier and identifier.casefold() == confirmation.casefold():
+                return selected
+            raise PlaneWorkflowError(
+                f"confirm_project_identifier {confirmation!r} does not match project {selected!r} "
+                f"(identifier {identifier or 'unknown'!r}); no change was made."
+            )
         active_label = active_project.identifier or active_project.name or active_project.id
         raise PlaneWorkflowError(
             f"Project {selected!r} is not the active project ({active_label!r}). "
-            "Call activate_plane_project first to prevent changing the wrong project."
+            "Call activate_plane_project first, or pass confirm_project_identifier with the target "
+            "project's identifier to change that project for this call only."
         )
     return selected
 
@@ -665,6 +748,8 @@ def _work_item_for_project(api: PlaneApi, project_id: str, work_item_id: str) ->
     try:
         work_item = api.work_item(project_id, selected_item)
     except PlaneWorkflowError as error:
+        if isinstance(error, PlaneApiError) and error.status_code != 404:
+            raise
         raise PlaneWorkflowError(
             f"Work item {selected_item!r} was not found in project {project_id!r}. "
             "It may belong to a different project; activate that project before changing it."
@@ -681,6 +766,53 @@ def _work_item_for_project(api: PlaneApi, project_id: str, work_item_id: str) ->
             f"not {project_id!r}. Activate its project before changing it."
         )
     return work_item
+
+
+def _work_item_cache_key(api: PlaneApi, project_id: str) -> tuple[Any, ...]:
+    return (getattr(api, "base_url", None), getattr(api, "workspace", None), project_id)
+
+
+def _cached_work_items(api: PlaneApi, project_id: str) -> list[dict[str, Any]]:
+    """Reuse one project listing across a batch of creates instead of paging every call."""
+    key = _work_item_cache_key(api, project_id)
+    cached = _WORK_ITEM_CACHE.get(key)
+    if cached and time.monotonic() - cached[0] < WORK_ITEM_CACHE_SECONDS:
+        return cached[1]
+    items, _ = api.work_items(project_id)
+    _WORK_ITEM_CACHE[key] = (time.monotonic(), list(items))
+    return _WORK_ITEM_CACHE[key][1]
+
+
+def _remember_work_item(api: PlaneApi, project_id: str, item: dict[str, Any]) -> None:
+    cached = _WORK_ITEM_CACHE.get(_work_item_cache_key(api, project_id))
+    if cached:
+        cached[1].append(item)
+
+
+def _forget_work_items(api: PlaneApi, project_id: str) -> None:
+    _WORK_ITEM_CACHE.pop(_work_item_cache_key(api, project_id), None)
+
+
+def _creation_external_id(project_id: str, title: str, idempotency_key: str | None) -> str:
+    digest = hashlib.sha256(f"{project_id}\n{_normalize(title)}\n{_text(idempotency_key)}".encode("utf-8")).hexdigest()
+    return f"create-{digest[:32]}"
+
+
+def _recover_created_work_item(api: PlaneApi, project_id: str, external_id: str, error: PlaneApiError) -> dict[str, Any] | None:
+    """Find the item a conflicting or unanswered create already made, so a retry never duplicates it."""
+    _forget_work_items(api, project_id)
+    conflict_id = error.payload.get("id") if isinstance(error.payload, dict) else None
+    if error.status_code == 409 and isinstance(conflict_id, str) and conflict_id:
+        return api.work_item(project_id, conflict_id)
+    items, _ = api.work_items(project_id)
+    return next(
+        (
+            item
+            for item in items
+            if item.get("external_id") == external_id and item.get("external_source") in {None, EXTERNAL_SOURCE}
+        ),
+        None,
+    )
 
 
 def _results(payload: Any) -> list[dict[str, Any]]:
@@ -1390,10 +1522,24 @@ def _validate_estimate(value: int | str | None) -> int | str | None:
     raise PlaneWorkflowError("estimate must be a non-negative number or a configured estimate value.")
 
 
+def _project_has_no_estimates(api: PlaneApi, project_id: str) -> bool:
+    try:
+        project = api.project(project_id)
+    except PlaneWorkflowError:
+        return False
+    return isinstance(project, dict) and "estimate" in project and not project.get("estimate")
+
+
 def _resolve_estimate_selection(api: PlaneApi, project_id: str, estimate: int | str | None, *, required: bool) -> int | str | None:
     if estimate is None:
         return None
     points, capability = _estimate_options(api, project_id)
+    if (capability["available"] and not points) or (not capability["available"] and _project_has_no_estimates(api, project_id)):
+        raise PlaneWorkflowError(
+            f"Project {project_id!r} has no estimate points, so estimate {estimate!r} cannot be set. "
+            "Enable estimates in the Plane project settings, remove the estimate from the profile's "
+            "planning.complexity mapping, or omit estimate."
+        )
     if not capability["available"]:
         if required and not isinstance(estimate, int):
             raise PlaneWorkflowError("Strict planning could not read this project's estimate points.")
@@ -2469,6 +2615,7 @@ def add_work_item_relation(
     ],
     related_work_item_ids: list[str],
     project_id: str | None = None,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Preview or create same-project work-item relations. Set confirm=true after reviewing the relation direction."""
@@ -2480,7 +2627,7 @@ def add_work_item_relation(
     if work_item_id in related_ids:
         raise PlaneWorkflowError("A work item cannot be related to itself.")
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     source = _work_item_for_project(api, project_id, work_item_id)
     targets = [_work_item_for_project(api, project_id, related_id) for related_id in related_ids]
     current = _relation_view(api.work_item_relations(project_id, work_item_id))
@@ -2526,13 +2673,14 @@ def add_work_item_evidence_links(
     work_item_id: str = "",
     evidence: list[dict[str, str]] | None = None,
     note: str | None = None,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Preview or attach validated evidence links to one work item. Set confirm=true to create the links."""
     if evidence is None:
         raise PlaneWorkflowError("evidence is required.")
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     existing = _work_item_for_project(api, project_id, work_item_id)
     normalized_links = _normalize_evidence_links(evidence)
     note_text = _text(note)
@@ -2586,12 +2734,13 @@ def upload_work_item_attachment(
     work_item_id: str = "",
     file_path: str = "",
     max_size_mb: int = 25,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Preview or upload one local file as a Plane attachment. Set confirm=true to upload the file."""
     metadata = _attachment_metadata(file_path, max_size_mb)
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     _work_item_for_project(api, project_id, work_item_id)
     preview = {
         "project_id": project_id,
@@ -2649,9 +2798,16 @@ def create_standard_work_item(
     target_date: str | None = None,
     cycle_id: str | None = None,
     release_id: str | None = None,
+    idempotency_key: str | None = None,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Create a structured Plane work item with labels, duplicate review, optional module/cycle assignment, and planning fields."""
+    """Create a structured Plane work item with labels, duplicate review, optional module/cycle assignment, and planning fields.
+
+    Retrying a create with the same title (and idempotency_key, when one was given) returns the
+    item the first attempt made instead of creating a second one. Set idempotency_key to create
+    intentionally separate items with the same title together with allow_duplicate=true.
+    """
     if not _text(outcome):
         raise PlaneWorkflowError("outcome is required.")
     if not acceptance_criteria:
@@ -2661,7 +2817,7 @@ def create_standard_work_item(
     selected_cycle = _text(cycle_id) or None
     selected_release = _text(release_id) or None
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     profile, _ = _resolve_profile(api, project_id)
     plan = _resolve_creation_plan(
         profile,
@@ -2700,7 +2856,7 @@ def create_standard_work_item(
         required=plan["mode"] == "strict",
     )
     title = _build_title(profile, context=context, module=module_name, surface=surface, outcome=outcome, title_parts=title_parts)
-    work_items, _ = api.work_items(project_id)
+    work_items = _cached_work_items(api, project_id)
     duplicate = _duplicate(work_items, title)
     if duplicate and not allow_duplicate:
         return {"status": "duplicate_detected", "title": title, "duplicate": _work_item_summary(duplicate)}
@@ -2771,17 +2927,45 @@ def create_standard_work_item(
     if type_label:
         label_ids.append(type_label["id"])
 
-    item = api.create_work_item(
-        project_id,
-        {"name": title, "description_html": description_html, "priority": selected_priority, "labels": label_ids or None, **workflow_payload},
-    )
+    create_payload: dict[str, Any] = {
+        "name": title,
+        "description_html": description_html,
+        "priority": selected_priority,
+        "labels": label_ids or None,
+        **workflow_payload,
+    }
+    external_id = None if allow_duplicate and not _text(idempotency_key) else _creation_external_id(project_id, title, idempotency_key)
+    if external_id:
+        create_payload.update({"external_id": external_id, "external_source": EXTERNAL_SOURCE})
+    recovered = False
+    try:
+        item = api.create_work_item(project_id, create_payload)
+    except PlaneApiError as error:
+        if external_id is None or not (error.status_code == 409 or error.outcome_unknown):
+            if error.status_code == 400 and selected_estimate is not None:
+                raise PlaneWorkflowError(
+                    f"{error} The estimate {selected_estimate!r} may not exist in this project; "
+                    "check get_workflow_options or the profile's complexity estimate mapping."
+                ) from error
+            raise
+        existing = _recover_created_work_item(api, project_id, external_id, error)
+        if existing is None:
+            if error.outcome_unknown:
+                raise PlaneWorkflowError(
+                    f"{error} No item from this request was found in Plane, so retrying with the same "
+                    "arguments is safe and will not create a duplicate."
+                ) from error
+            raise
+        item, recovered = existing, True
+    _remember_work_item(api, project_id, item)
     if module:
         api.attach_to_module(project_id, module["id"], [item["id"]])
     if selected_cycle:
         api.attach_to_cycle(project_id, selected_cycle, [item["id"]])
     return {
-        "status": "created",
+        "status": "already_created" if recovered else "created",
         "work_item": _work_item_summary(item),
+        "external_id": external_id,
         "module": {"id": module.get("id"), "name": module.get("name")} if module else None,
         "labels": requested_labels + ([type_label.get("name")] if type_label else []),
         "workflow": workflow_summary,
@@ -2794,11 +2978,12 @@ def start_standard_work_item(
     project_id: str | None = None,
     state_id: str | None = None,
     start_date: str | None = None,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Preview or start planned work using the project's configured started state and the actual start date."""
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     profile, _ = _resolve_profile(api, project_id)
     planning = _planning_policy(profile)
     selected_state = _text(state_id) or _text(planning.get("default_started_state_id"))
@@ -2843,6 +3028,7 @@ def complete_standard_work_item(
     follow_ups: list[str] | None = None,
     actual_minutes: PositiveInt | None = None,
     state_id: str | None = None,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Preview or complete started work after recording a factual, human-readable completion comment."""
@@ -2858,7 +3044,7 @@ def complete_standard_work_item(
         raise PlaneWorkflowError("actual_minutes must be a positive whole number when supplied.")
 
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     profile, _ = _resolve_profile(api, project_id)
     planning = _planning_policy(profile)
     selected_state = _text(state_id) or _text(planning.get("default_completed_state_id"))
@@ -2985,6 +3171,7 @@ def cancel_standard_work_item(
     project_id: str | None = None,
     follow_ups: list[str] | None = None,
     state_id: str | None = None,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Preview or cancel unfinished work after recording a factual reason and optional follow-ups."""
@@ -2995,7 +3182,7 @@ def cancel_standard_work_item(
         raise PlaneWorkflowError("reason must be 4,000 characters or fewer.")
     selected_follow_ups = _normalize_text_list(follow_ups, "follow_ups")
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     profile, _ = _resolve_profile(api, project_id)
     selected_state = _text(state_id) or _text(_planning_policy(profile).get("default_cancelled_state_id"))
     if not selected_state:
@@ -3090,6 +3277,7 @@ def update_standard_work_item(
     target_date: str | None = None,
     cycle_id: str | None = None,
     release_id: str | None = None,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Preview or update a specific Plane work item while preserving labels and description unless a structured replacement is requested."""
@@ -3104,7 +3292,8 @@ def update_standard_work_item(
     selected_target_date = _validate_date(target_date, "target_date")
     _validate_date_range(selected_start_date, selected_target_date)
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
+    _forget_work_items(api, project_id)
     profile, _ = _resolve_profile(api, project_id)
     _validate_workflow_selection(
         api,
@@ -3214,11 +3403,12 @@ def ensure_module(
     work_item_ids: list[str] | None = None,
     description: str | None = None,
     create_if_missing: bool = False,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Preview or find an existing module, then explicitly create or assign it when requested."""
     api = PlaneApi(_find_plane_settings())
-    project_id = _project_id(api, project_id, enforce_active=True)
+    project_id = _project_id(api, project_id, enforce_active=True, confirm_project_identifier=confirm_project_identifier)
     for work_item_id in work_item_ids or []:
         _work_item_for_project(api, project_id, work_item_id)
     if dry_run:
@@ -3321,7 +3511,7 @@ def export_work_items_report(
     Example filters: {"state_names": ["Backlog", "In Progress"]}. Example layout:
     {"group_by": "state", "columns": ["identifier", "title", "state", "priority"]}.
     """
-    from reports import ReportError, export_work_items_report as export_report
+    from .reports import ReportError, export_work_items_report as export_report
 
     try:
         api = PlaneApi(_find_plane_settings())

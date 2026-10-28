@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import configuration
+from plane_workflow_mcp import configuration
 
 
 class _Keyring:

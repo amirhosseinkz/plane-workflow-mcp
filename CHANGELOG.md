@@ -5,6 +5,54 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
+### Added
+
+- Outcome-led quick start, sourced official-server comparison, client compatibility
+  matrix, and copyable task, completion, and briefing workflows.
+- Reproducible offline creation preview and a live-demo recording script.
+- Clean-install distribution smoke checks for the CLI, bundled profiles, and MCP
+  tool discovery.
+
+- README animation rendered from an offline walkthrough of the real create flow
+  (`scripts/demo_walkthrough.py`, `scripts/render_demo_gif.py`).
+- Claude Code plugin marketplace (`/plugin marketplace add amirhosseinkz/plane-workflow-mcp`)
+  with the MCP server and the Plane Workflow skill, and `setup --client none` to
+  store credentials without registering a client.
+- Guided setup for Claude Code (`--client claude-code`, user scope), Cursor, and
+  Claude Desktop. Clients launched from a desktop app get the absolute launcher path.
+- `idempotency_key` on `create_standard_work_item`. Creates carry a stable
+  `external_id`, so a retry after a timeout or conflict returns the existing item
+  (`already_created`) instead of creating a duplicate.
+- `plane-workflow --version`, and `plane-workflow status` reports the installed
+  version and, when a newer GitHub release exists, the command to update.
+- `confirm_project_identifier` on project-scoped write tools changes a non-active
+  project for one call when it matches that project's identifier; the active
+  project is unchanged.
+
+### Changed
+
+- Plane requests retry HTTP 429 (honoring `Retry-After`) and, for reads, 502/503/504
+  and network errors with exponential backoff. Writes that get no response are not
+  resent and are reported as possibly applied.
+- Creation reuses one project work-item listing for two minutes for duplicate
+  checks, instead of paging the whole project on every create.
+- Quick start installs the existing versioned GitHub wheel without cloning.
+- The modules now ship inside the `plane_workflow_mcp` package instead of as
+  top-level `cli`, `server`, `configuration`, and `reports` modules. The
+  `plane-workflow` command is unchanged; `python -m plane_workflow_mcp` also works.
+- Successful guided setup explains project selection and suggests a read-only
+  first request.
+- Advanced setup, workflow, and release instructions moved into dedicated guides.
+
+### Fixed
+
+- Rate-limit, server, and network failures are no longer reported as "work item
+  was not found in project"; only HTTP 404 gets that explanation.
+- Setting an estimate on a project without estimate points returns an actionable
+  error instead of a bare HTTP 400.
+
 ## [0.5.0] - 2026-09-04
 
 ### Added

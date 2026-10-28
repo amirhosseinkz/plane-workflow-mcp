@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import requests
-import server
+from plane_workflow_mcp import server
 
 
 PROJECT_ID = "project-id"
@@ -157,6 +157,9 @@ class _Api:
 
 
 class LifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        server._WORK_ITEM_CACHE.clear()
+
     def _patch_api(self, api: _Api, profile: dict[str, object] | None = None):
         return patch.multiple(
             server,
@@ -419,9 +422,53 @@ class LifecycleTests(unittest.TestCase):
     def test_plane_request_wraps_network_failures(self) -> None:
         api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
         api.session.request = lambda *args, **kwargs: (_ for _ in ()).throw(requests.Timeout("timed out"))  # type: ignore[method-assign]
+        api.sleep = lambda _: None  # type: ignore[method-assign]
 
         with self.assertRaisesRegex(server.PlaneWorkflowError, "before a response"):
             api.project(PROJECT_ID)
+
+    def test_rate_limited_requests_are_retried_with_retry_after(self) -> None:
+        api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
+        limited = requests.Response()
+        limited.status_code = 429
+        limited.headers["Retry-After"] = "3"
+        ok = requests.Response()
+        ok.status_code = 200
+        ok._content = b'{"id": "created"}'
+        responses = [limited, limited, ok]
+        delays: list[float] = []
+        api.session.request = lambda *args, **kwargs: responses.pop(0)  # type: ignore[method-assign]
+        api.sleep = delays.append  # type: ignore[method-assign]
+
+        self.assertEqual(api.create_work_item(PROJECT_ID, {"name": "x"}), {"id": "created"})
+        self.assertEqual(delays, [3.0, 3.0])
+
+    def test_rate_limit_that_persists_reports_status_and_advice(self) -> None:
+        api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
+        limited = requests.Response()
+        limited.status_code = 429
+        calls: list[object] = []
+        api.session.request = lambda *args, **kwargs: calls.append(args) or limited  # type: ignore[method-assign]
+        api.sleep = lambda _: None  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(server.PlaneWorkflowError, "HTTP 429.*rate limit") as raised:
+            api.project(PROJECT_ID)
+        self.assertEqual(raised.exception.status_code, 429)
+        self.assertEqual(len(calls), server.MAX_REQUEST_ATTEMPTS)
+
+    def test_write_timeout_is_not_retried_and_is_marked_outcome_unknown(self) -> None:
+        api = server.PlaneApi(server.PlaneSettings("https://plane.example.test", "key", "workspace"))
+        calls: list[object] = []
+
+        def timeout(*args: object, **kwargs: object) -> requests.Response:
+            calls.append(args)
+            raise requests.Timeout("timed out")
+
+        api.session.request = timeout  # type: ignore[method-assign]
+        with self.assertRaisesRegex(server.PlaneWorkflowError, "may or may not have been applied") as raised:
+            api.create_work_item(PROJECT_ID, {"name": "x"})
+        self.assertTrue(raised.exception.outcome_unknown)
+        self.assertEqual(len(calls), 1)
 
     def test_timeout_after_comment_commit_is_safe_to_retry(self) -> None:
         api = _Api()
@@ -607,3 +654,99 @@ class LifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CreationRobustnessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        server._WORK_ITEM_CACHE.clear()
+
+    def _patch_api(self, api: _Api):
+        return patch.multiple(
+            server,
+            PlaneApi=lambda settings: api,
+            _find_plane_settings=lambda: server.PlaneSettings("https://plane.example.test", "key", "workspace"),
+            _load_profile_config=lambda: _profile("advisory"),
+        )
+
+    @staticmethod
+    def _create(outcome: str = "Improve quality", **overrides: object) -> dict[str, object]:
+        return server.create_standard_work_item(
+            project_id=PROJECT_ID,
+            outcome=outcome,
+            acceptance_criteria=["Viewer can select a quality"],
+            **overrides,
+        )
+
+    def test_batch_creates_list_the_project_once(self) -> None:
+        api = _Api()
+        listings: list[str] = []
+        original = api.work_items
+        api.work_items = lambda project_id: listings.append(project_id) or original(project_id)  # type: ignore[method-assign]
+        with self._patch_api(api):
+            first = self._create("Add login form")
+            second = self._create("Add login form")
+
+        self.assertEqual(first["status"], "created")
+        self.assertEqual(second["status"], "duplicate_detected")
+        self.assertEqual(listings, [PROJECT_ID])
+
+    def test_create_sends_a_stable_external_id(self) -> None:
+        api = _Api()
+        payloads: list[dict[str, object]] = []
+        api.create_work_item = lambda project_id, payload: payloads.append(payload) or {"id": "new-item", **payload}  # type: ignore[method-assign]
+        with self._patch_api(api):
+            result = self._create()
+
+        self.assertEqual(payloads[0]["external_source"], "plane-workflow")
+        self.assertEqual(payloads[0]["external_id"], result["external_id"])
+        self.assertEqual(result["external_id"], server._creation_external_id(PROJECT_ID, payloads[0]["name"], None))
+
+    def test_conflicting_create_returns_the_existing_item(self) -> None:
+        api = _Api()
+
+        def conflict(project_id: str, payload: dict[str, object]) -> dict[str, object]:
+            raise server.PlaneApiError("HTTP 409", status_code=409, payload={"id": "item-id"})
+
+        api.create_work_item = conflict  # type: ignore[method-assign]
+        with self._patch_api(api):
+            result = self._create()
+
+        self.assertEqual(result["status"], "already_created")
+        self.assertEqual(result["work_item"]["id"], "item-id")
+
+    def test_unanswered_create_is_recovered_by_external_id(self) -> None:
+        api = _Api()
+
+        def commit_then_timeout(project_id: str, payload: dict[str, object]) -> dict[str, object]:
+            api.items.append({"id": "made-item", "name": payload["name"], "external_id": payload["external_id"], "external_source": "plane-workflow"})
+            raise server.PlaneApiError("no response", outcome_unknown=True)
+
+        api.create_work_item = commit_then_timeout  # type: ignore[method-assign]
+        with self._patch_api(api):
+            result = self._create()
+
+        self.assertEqual(result["status"], "already_created")
+        self.assertEqual(result["work_item"]["id"], "made-item")
+
+    def test_unanswered_create_without_a_match_says_retry_is_safe(self) -> None:
+        api = _Api()
+        api.create_work_item = lambda project_id, payload: (_ for _ in ()).throw(server.PlaneApiError("no response", outcome_unknown=True))  # type: ignore[method-assign]
+        with self._patch_api(api):
+            with self.assertRaisesRegex(server.PlaneWorkflowError, "retrying with the same arguments is safe"):
+                self._create()
+
+    def test_project_without_estimates_gets_an_actionable_error(self) -> None:
+        api = _Api()
+        api.estimate = lambda project_id: None  # type: ignore[method-assign]
+        with self._patch_api(api):
+            with self.assertRaisesRegex(server.PlaneWorkflowError, "has no estimate points.*Enable estimates"):
+                self._create(estimate=3)
+
+    def test_estimate_catalog_missing_and_project_without_estimate_is_explained(self) -> None:
+        api = _Api()
+        api.estimate = lambda project_id: (_ for _ in ()).throw(server.PlaneApiError("HTTP 404", status_code=404))  # type: ignore[method-assign]
+        api.project = lambda project_id: {"id": project_id, "identifier": "TEST", "estimate": None}  # type: ignore[method-assign]
+        with self._patch_api(api):
+            with self.assertRaisesRegex(server.PlaneWorkflowError, "has no estimate points"):
+                self._create(estimate=3)
+

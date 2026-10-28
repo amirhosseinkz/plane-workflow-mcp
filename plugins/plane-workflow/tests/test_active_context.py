@@ -5,8 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import configuration
-import server
+from plane_workflow_mcp import configuration
+from plane_workflow_mcp import server
 
 
 class _Keyring:
@@ -96,3 +96,45 @@ class ActiveContextTests(unittest.TestCase):
 
         with self.assertRaisesRegex(server.PlaneWorkflowError, "may belong to a different project"):
             server._work_item_for_project(api, "active-project", "work-item")
+
+    def test_rate_limit_is_not_reported_as_a_missing_work_item(self) -> None:
+        api = _WorkItemApi(error=server.PlaneApiError("Plane API request failed with HTTP 429.", status_code=429))
+
+        with self.assertRaisesRegex(server.PlaneWorkflowError, "HTTP 429") as raised:
+            server._work_item_for_project(api, "active-project", "work-item")
+        self.assertNotIn("not found", str(raised.exception))
+
+    def _with_active_project(self):
+        keyring = _Keyring()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        environment = patch.dict("os.environ", {"PLANE_WORKFLOW_HOME": directory.name}, clear=False)
+        environment.start()
+        self.addCleanup(environment.stop)
+        keyring_patch = patch.object(configuration, "keyring", keyring)
+        keyring_patch.start()
+        self.addCleanup(keyring_patch.stop)
+        configuration.save_stored_plane_settings(
+            base_url="https://plane.example.test", workspace="workspace-slug", api_key="secret", profile="workspace"
+        )
+        configuration.set_stored_active_project(
+            profile="workspace", project_id="active-project", identifier="ACTIVE", name="Active project"
+        )
+        return SimpleNamespace(
+            profile="workspace",
+            workspace="workspace-slug",
+            project=lambda project_id: {"id": project_id, "identifier": "WEB"},
+        )
+
+    def test_matching_identifier_allows_a_one_call_project_override(self) -> None:
+        api = self._with_active_project()
+
+        self.assertEqual(server._project_id(api, "other-project", enforce_active=True, confirm_project_identifier="web"), "other-project")
+        self.assertEqual(configuration.load_stored_plane_settings("workspace").active_project.id, "active-project")
+
+    def test_mismatched_identifier_rejects_the_override(self) -> None:
+        api = self._with_active_project()
+
+        with self.assertRaisesRegex(server.PlaneWorkflowError, "does not match"):
+            server._project_id(api, "other-project", enforce_active=True, confirm_project_identifier="ACTIVE")
+

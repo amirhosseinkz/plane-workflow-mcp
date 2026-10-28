@@ -31,10 +31,12 @@ ABSOLUTE_LOCAL_PATH = re.compile(
 ALLOWED_HOSTS = {
     "example.com",
     "github.com",
+    "api.github.com",
     "json-schema.org",
     "modelcontextprotocol.io",
     "opencode.ai",
     "plane.so",
+    "pypi.org",
     "docs.astral.sh",
     "semver.org",
 }

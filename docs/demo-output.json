@@ -1,0 +1,31 @@
+{
+  "demo": "Offline fixture; fixed date and synthetic IDs. No live Plane connection.",
+  "result": {
+    "status": "preview",
+    "work_item": {
+      "title": "Web | Checkout | Prevent duplicate orders when checkout is retried",
+      "priority": "medium",
+      "module": null,
+      "type": "bug",
+      "labels": [
+        "Engineering",
+        "Bug"
+      ],
+      "description_html": "<p><strong>Current behavior</strong></p><p>Retrying checkout after a timeout can create two orders.</p><p><strong>Expected behavior</strong></p><p>Retrying the same request creates only one order.</p><p><strong>Scope</strong></p><p>Checkout retry handling and regression tests</p><p><strong>Acceptance criteria</strong></p><ul><li>Repeating the same request creates one order</li><li>A failed first attempt can be retried</li><li>The existing successful checkout flow still works</li></ul>",
+      "workflow": {
+        "planning_mode": "strict",
+        "complexity": "small",
+        "lead_business_days": 2,
+        "assignee_ids": [
+          "member-id"
+        ],
+        "state_id": "backlog-id",
+        "estimate": "point-id",
+        "start_date": "2026-09-04",
+        "target_date": "2026-09-07",
+        "cycle_id": null
+      }
+    },
+    "note": "No Plane data was changed."
+  }
+}
