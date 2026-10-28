@@ -39,14 +39,11 @@ Changelog = "https://github.com/amirhosseinkz/plane-workflow-mcp/blob/main/CHANG
 Documentation = "https://github.com/amirhosseinkz/plane-workflow-mcp/tree/main/docs"
 
 [project.scripts]
-plane-workflow = "cli:main"
+plane-workflow = "plane_workflow_mcp.cli:main"
 
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-py-modules = ["cli", "configuration", "reports", "server"]
 
 [tool.setuptools.packages.find]
 include = ["plane_workflow_mcp"]

@@ -27,7 +27,7 @@ import requests
 from fastmcp import FastMCP
 from pydantic import Field
 
-from configuration import (
+from .configuration import (
     ConfigurationError,
     StoredPlaneProject,
     activate_stored_plane_profile,
@@ -3511,7 +3511,7 @@ def export_work_items_report(
     Example filters: {"state_names": ["Backlog", "In Progress"]}. Example layout:
     {"group_by": "state", "columns": ["identifier", "title", "state", "priority"]}.
     """
-    from reports import ReportError, export_work_items_report as export_report
+    from .reports import ReportError, export_work_items_report as export_report
 
     try:
         api = PlaneApi(_find_plane_settings())

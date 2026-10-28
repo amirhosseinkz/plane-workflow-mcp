@@ -20,7 +20,7 @@ from fastmcp.client.transports import StdioTransport
 async def check():
     profiles = importlib.resources.files("plane_workflow_mcp").joinpath("profiles.json")
     assert json.loads(profiles.read_text())["default"]["planning"]["mode"] == "advisory"
-    transport = StdioTransport(command=sys.executable, args=["-m", "cli", "mcp"])
+    transport = StdioTransport(command=sys.executable, args=["-m", "plane_workflow_mcp", "mcp"])
     async with Client(transport) as client:
         names = {tool.name for tool in await client.list_tools()}
         required = {"create_standard_work_item", "get_project_briefing", "complete_standard_work_item"}
