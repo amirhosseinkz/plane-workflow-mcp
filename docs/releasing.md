@@ -66,19 +66,13 @@ compatibility with a GUI client. CI runs this check on every build.
 
 ## Distribution status
 
-v0.6.0 is available as a wheel and source archive on GitHub Releases. The README
-uses the exact wheel URL and can be used without a clone. PyPI returned no project
-for `plane-workflow-mcp` when checked on September 27, 2026; do not advertise a
-registry installation until a release has actually been uploaded and verified.
+Since v0.6.0 the package is on PyPI as `plane-workflow-mcp`, and each GitHub
+release also carries the wheel and source archive.
 
-For a future PyPI release, the maintainer must have access to the package name and
-configure registry credentials or a trusted publisher. Use a new version for code
-changes; never silently replace a published release artifact with an unreleased build.
-Update the version and lockfile, run all checks, build the artifacts, and publish
-those exact files using `uv publish`. Keep credentials out of commands and source.
-Only then verify installation from a fresh environment and update the README's
-install command. Package upload and registry account setup are not part of the
-local documentation update.
+To release: update the version and lockfiles, run all checks, merge, then publish a
+GitHub release with the built artifacts. Use a new version for code changes; never
+replace a published artifact. After the publish workflow finishes, verify a fresh
+install with `uvx --from plane-workflow-mcp plane-workflow --version`.
 
 The `Publish to PyPI` workflow (`.github/workflows/publish.yml`) builds, smoke-tests,
 and uploads the artifacts with PyPI trusted publishing when a GitHub release is

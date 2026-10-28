@@ -108,7 +108,7 @@ class CliTests(unittest.TestCase):
             cli.os.environ.pop("PLANE_WORKFLOW_NO_UPDATE_CHECK", None)
             update = cli.check_for_update("0.6.0", get=get)
             self.assertEqual(update["latest_version"], "0.7.0")
-            self.assertEqual(update["update_command"], "uv tool install --force https://downloads.example.test/x.whl")
+            self.assertEqual(update["update_command"], "uv tool install --force plane-workflow-mcp")
             self.assertIsNone(cli.check_for_update("0.7.0", get=get))
             self.assertIsNone(cli.check_for_update("0.10.0", get=get))
 

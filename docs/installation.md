@@ -63,7 +63,7 @@ plane-workflow status
 `status` asks GitHub for the latest release. The request uses a three-second timeout
 and sends no Plane data. If a newer version exists, `update_available.update_command`
 holds the install command, for example
-`uv tool install --force <wheel URL of the new release>`. Restart the client afterwards.
+`uv tool install --force plane-workflow-mcp`. Restart the client afterwards.
 Set `PLANE_WORKFLOW_NO_UPDATE_CHECK=1` to skip the lookup.
 
 ## Workspaces and projects
@@ -99,7 +99,7 @@ Claude how to use the tools safely. It needs [uv](https://docs.astral.sh/uv/).
 First store your Plane credentials once, without registering a client:
 
 ```bash
-uvx --from https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.6.0/plane_workflow_mcp-0.6.0-py3-none-any.whl plane-workflow setup --client none
+uvx --from plane-workflow-mcp plane-workflow setup --client none
 ```
 
 Then, in Claude Code:

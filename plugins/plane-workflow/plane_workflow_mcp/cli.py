@@ -22,7 +22,8 @@ JSON_CLIENTS = ("claude-desktop", "cursor", "opencode", "zed")
 CLI_CLIENTS = {"claude-code": "claude", "codex": "codex"}
 PACKAGE_NAME = "plane-workflow-mcp"
 LATEST_RELEASE_URL = "https://api.github.com/repos/amirhosseinkz/plane-workflow-mcp/releases/latest"
-UPDATE_COMMAND = "uv tool install --force {wheel_url}"
+# --force also moves installs made from a release wheel URL onto PyPI.
+UPDATE_COMMAND = "uv tool install --force plane-workflow-mcp"
 
 
 class SetupError(RuntimeError):
@@ -378,18 +379,10 @@ def check_for_update(current: str | None, get: Callable[..., Any] | None = None)
     tag = release.get("tag_name") if isinstance(release, dict) else None
     if not isinstance(tag, str) or _version_key(tag) <= _version_key(current):
         return None
-    wheel = next(
-        (
-            asset.get("browser_download_url")
-            for asset in release.get("assets", [])
-            if isinstance(asset, dict) and str(asset.get("name", "")).endswith(".whl")
-        ),
-        None,
-    )
     return {
         "latest_version": tag.lstrip("v"),
         "release_url": release.get("html_url"),
-        "update_command": UPDATE_COMMAND.format(wheel_url=wheel) if wheel else None,
+        "update_command": UPDATE_COMMAND,
     }
 
 
