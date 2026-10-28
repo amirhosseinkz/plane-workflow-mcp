@@ -5,6 +5,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
 ### Added
 
 - Outcome-led quick start, sourced official-server comparison, client compatibility
@@ -30,6 +32,9 @@ uses [Semantic Versioning](https://semver.org/).
 - Creation reuses one project work-item listing for two minutes for duplicate
   checks, instead of paging the whole project on every create.
 - Quick start installs the existing versioned GitHub wheel without cloning.
+- The modules now ship inside the `plane_workflow_mcp` package instead of as
+  top-level `cli`, `server`, `configuration`, and `reports` modules. The
+  `plane-workflow` command is unchanged; `python -m plane_workflow_mcp` also works.
 - Successful guided setup explains project selection and suggests a read-only
   first request.
 - Advanced setup, workflow, and release instructions moved into dedicated guides.
