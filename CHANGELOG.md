@@ -15,6 +15,8 @@ uses [Semantic Versioning](https://semver.org/).
 - Clean-install distribution smoke checks for the CLI, bundled profiles, and MCP
   tool discovery.
 
+- README animation rendered from an offline walkthrough of the real create flow
+  (`scripts/demo_walkthrough.py`, `scripts/render_demo_gif.py`).
 - Guided setup for Claude Code (`--client claude-code`, user scope), Cursor, and
   Claude Desktop. Clients launched from a desktop app get the absolute launcher path.
 - `idempotency_key` on `create_standard_work_item`. Creates carry a stable

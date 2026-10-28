@@ -9,6 +9,11 @@ change first and record what was actually done and how it was verified.
 
 [![CI](https://github.com/amirhosseinkz/plane-workflow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/amirhosseinkz/plane-workflow-mcp/actions/workflows/ci.yml)
 
+![Offline demo: a bug report becomes a previewed task, and a timed-out create is retried without a duplicate](docs/demo.gif)
+
+<sub>Offline demo: the real server code runs against a test fixture with synthetic data.
+[Reproduce it](docs/demo.md).</sub>
+
 ## What it does
 
 - **Plan → start → complete, with evidence.** New work gets scope, acceptance

@@ -17,6 +17,18 @@ strict planning defaults, acceptance criteria, and a preview with no writes.
 start and Monday target to demonstrate the fixture's two-business-day mapping.
 It is a code demonstration, not a live integration test or a client recording.
 
+## Regenerate the README animation
+
+`docs/demo.gif` is rendered from `scripts/demo_walkthrough.py`, which calls the real
+`create_standard_work_item` against the same offline fixture. It shows a preview, a
+create whose response times out after the write (recovered by `external_id`), and a
+retry that is caught as a duplicate. The data is synthetic and Plane is never contacted.
+
+```bash
+uv run --locked --project plugins/plane-workflow python scripts/demo_walkthrough.py
+uv run --locked --project plugins/plane-workflow --with pillow python scripts/render_demo_gif.py docs/demo.gif
+```
+
 ## Record a 45-second live walkthrough
 
 Use a disposable Plane project and the first prompt in [examples](examples.md).
