@@ -1,0 +1,17 @@
+{
+  "name": "plane-workflow-community",
+  "owner": {
+    "name": "Plane Workflow Contributors"
+  },
+  "metadata": {
+    "description": "Community plugins for working with Plane from Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "plane-workflow",
+      "source": "./plugins/plane-workflow",
+      "description": "Plan, start, and complete Plane work items under your team's rules, with previews and completion records.",
+      "category": "productivity"
+    }
+  ]
+}

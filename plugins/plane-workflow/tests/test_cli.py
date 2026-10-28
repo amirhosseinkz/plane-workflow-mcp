@@ -120,3 +120,12 @@ class CliTests(unittest.TestCase):
         with patch.dict("os.environ", {"PLANE_WORKFLOW_NO_UPDATE_CHECK": "1"}):
             self.assertIsNone(cli.check_for_update("0.6.0", get=lambda *a, **k: AssertionError("must not call")))
 
+    def test_setup_without_a_client_only_stores_credentials(self) -> None:
+        with patch.object(cli, "_validate_connection"), patch.object(cli.configuration, "save_stored_plane_settings", return_value="profile.json") as save, \
+                patch.object(cli, "_install_cli_client", side_effect=AssertionError("must not register")), \
+                patch.object(cli, "_install_json_client", side_effect=AssertionError("must not register")), \
+                patch.dict("os.environ", {"PLANE_API_KEY": "secret"}):
+            result = cli.main(["setup", "--client", "none", "--base-url", "https://plane.example.test", "--workspace", "w", "--non-interactive", "--yes"])
+        self.assertEqual(result, 0)
+        save.assert_called_once()
+
