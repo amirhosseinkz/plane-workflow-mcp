@@ -62,3 +62,35 @@ class CliTests(unittest.TestCase):
                     expected.append(["codex", "mcp", "remove", "plane-workflow"])
                 expected.append(["codex", "mcp", "add", "plane-workflow", "--", "plane-workflow", "mcp"])
                 self.assertEqual(commands, expected)
+
+    def test_claude_code_setup_registers_user_scope_with_absolute_launcher(self) -> None:
+        from unittest.mock import Mock
+
+        runner = Mock(side_effect=[
+            subprocess.CompletedProcess([], 1, "", "No MCP server found"),
+            subprocess.CompletedProcess([], 0, "", ""),
+        ])
+        with patch.object(cli.shutil, "which", return_value="/opt/bin/plane-workflow"):
+            cli._install_cli_client("claude-code", runner=runner)
+        commands = [call.args[0] for call in runner.call_args_list]
+        self.assertEqual(commands, [
+            ["claude", "mcp", "get", "plane-workflow"],
+            ["claude", "mcp", "add", "--scope", "user", "plane-workflow", "--", "/opt/bin/plane-workflow", "mcp"],
+        ])
+
+    def test_claude_code_dry_run_does_not_call_the_cli(self) -> None:
+        with patch.object(cli.subprocess, "run", side_effect=AssertionError("must not run")), patch.object(cli.configuration, "save_stored_plane_settings", side_effect=AssertionError("must not save")):
+            self.assertEqual(cli.main(["setup", "--client", "claude-code", "--dry-run", "--yes"]), 0)
+
+    def test_cursor_and_claude_desktop_write_mcp_servers_entry(self) -> None:
+        for client in ("cursor", "claude-desktop"):
+            with self.subTest(client=client), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "mcp.json"
+                path.write_text('{"mcpServers": {"other": {"command": "x"}}}', encoding="utf-8")
+                with patch.object(cli.shutil, "which", return_value=None):
+                    cli._install_json_client(client, path)
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["mcpServers"]["plane-workflow"], {"command": "plane-workflow", "args": ["mcp"]})
+                self.assertIn("other", payload["mcpServers"])
+                self.assertTrue(cli._remove_json_client(client, path))
+                self.assertNotIn("plane-workflow", json.loads(path.read_text(encoding="utf-8"))["mcpServers"])

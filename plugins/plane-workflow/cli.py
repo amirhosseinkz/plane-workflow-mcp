@@ -16,7 +16,9 @@ import configuration
 import server
 
 
-CLIENTS = ("codex", "opencode", "zed")
+CLIENTS = ("claude-code", "codex", "claude-desktop", "cursor", "opencode", "zed")
+JSON_CLIENTS = ("claude-desktop", "cursor", "opencode", "zed")
+CLI_CLIENTS = {"claude-code": "claude", "codex": "codex"}
 
 
 class SetupError(RuntimeError):
@@ -139,6 +141,40 @@ def _zed_settings_path(override: str | None = None) -> Path:
     return Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "zed" / "settings.json"
 
 
+def _cursor_config_path(override: str | None = None) -> Path:
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".cursor" / "mcp.json"
+
+
+def _claude_desktop_config_path(override: str | None = None) -> Path:
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        directory = Path.home() / "Library" / "Application Support" / "Claude"
+    elif os.name == "nt":
+        directory = Path(os.getenv("APPDATA", Path.home())) / "Claude"
+    else:
+        directory = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / "Claude"
+    return directory / "claude_desktop_config.json"
+
+
+def _json_config_path(client: str, override: str | None = None) -> Path:
+    paths = {
+        "claude-desktop": _claude_desktop_config_path,
+        "cursor": _cursor_config_path,
+        "opencode": _opencode_config_path,
+        "zed": _zed_settings_path,
+    }
+    return paths[client](override)
+
+
+def _server_command() -> str:
+    """Prefer an absolute launcher path; desktop apps often start without the shell PATH."""
+    found = shutil.which("plane-workflow")
+    return str(Path(found).absolute()) if found else "plane-workflow"
+
+
 def _install_json_client(client: str, path: Path, *, dry_run: bool = False) -> Path:
     payload = _read_jsonc(path)
     if client == "opencode":
@@ -152,6 +188,11 @@ def _install_json_client(client: str, path: Path, *, dry_run: bool = False) -> P
         if not isinstance(servers, dict):
             raise SetupError("Zed settings have a non-object context_servers field.")
         servers["plane-workflow"] = {"command": "plane-workflow", "args": ["mcp"], "env": {}}
+    elif client in {"claude-desktop", "cursor"}:
+        servers = payload.setdefault("mcpServers", {})
+        if not isinstance(servers, dict):
+            raise SetupError(f"{client} config has a non-object mcpServers field.")
+        servers["plane-workflow"] = {"command": _server_command(), "args": ["mcp"]}
     else:
         raise SetupError(f"Unsupported JSON-configured client: {client}")
     if not dry_run:
@@ -161,7 +202,7 @@ def _install_json_client(client: str, path: Path, *, dry_run: bool = False) -> P
 
 def _remove_json_client(client: str, path: Path, *, dry_run: bool = False) -> bool:
     payload = _read_jsonc(path)
-    key = "mcp" if client == "opencode" else "context_servers"
+    key = {"opencode": "mcp", "zed": "context_servers"}.get(client, "mcpServers")
     servers = payload.get(key)
     if not isinstance(servers, dict) or "plane-workflow" not in servers:
         return False
@@ -171,41 +212,63 @@ def _remove_json_client(client: str, path: Path, *, dry_run: bool = False) -> bo
     return True
 
 
-def _run_codex(arguments: list[str], runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> subprocess.CompletedProcess[str]:
+def _run_client_cli(client: str, arguments: list[str], runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> subprocess.CompletedProcess[str]:
+    binary = CLI_CLIENTS[client]
     try:
-        return runner(["codex", "mcp", *arguments], text=True, capture_output=True, check=False)
+        return runner([binary, "mcp", *arguments], text=True, capture_output=True, check=False)
     except OSError as error:
-        raise SetupError("Codex CLI is not available on PATH.") from error
+        raise SetupError(f"The {binary} CLI is not available on PATH.") from error
 
 
-def _install_codex(*, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> str:
+def _cli_add_arguments(client: str) -> list[str]:
+    if client == "claude-code":
+        return ["add", "--scope", "user", "plane-workflow", "--", _server_command(), "mcp"]
+    return ["add", "plane-workflow", "--", "plane-workflow", "mcp"]
+
+
+def _cli_remove_arguments(client: str) -> list[str]:
+    if client == "claude-code":
+        return ["remove", "--scope", "user", "plane-workflow"]
+    return ["remove", "plane-workflow"]
+
+
+def _install_cli_client(client: str, *, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> str:
     if dry_run:
-        return "codex mcp add plane-workflow -- plane-workflow mcp"
-    current = _run_codex(["get", "plane-workflow"], runner)
+        return " ".join([CLI_CLIENTS[client], "mcp", *_cli_add_arguments(client)])
+    current = _run_client_cli(client, ["get", "plane-workflow"], runner)
     if current.returncode == 0:
-        removed = _run_codex(["remove", "plane-workflow"], runner)
+        removed = _run_client_cli(client, _cli_remove_arguments(client), runner)
         if removed.returncode != 0:
-            raise SetupError(f"Could not replace the existing Codex MCP server: {removed.stderr.strip()}")
-    added = _run_codex(["add", "plane-workflow", "--", "plane-workflow", "mcp"], runner)
+            raise SetupError(f"Could not replace the existing {client} MCP server: {removed.stderr.strip()}")
+    added = _run_client_cli(client, _cli_add_arguments(client), runner)
     if added.returncode != 0:
-        raise SetupError(f"Could not configure Codex: {added.stderr.strip()}")
-    return "Codex MCP configuration"
+        raise SetupError(f"Could not configure {client}: {added.stderr.strip()}")
+    return f"{client} MCP configuration"
 
 
-def _remove_codex(*, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> bool:
+def _remove_cli_client(client: str, *, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> bool:
     if dry_run:
         return True
-    result = _run_codex(["remove", "plane-workflow"], runner)
+    result = _run_client_cli(client, _cli_remove_arguments(client), runner)
     if result.returncode != 0:
-        if "not found" in result.stderr.casefold():
+        if "not found" in (result.stderr + result.stdout).casefold():
             return False
-        raise SetupError(f"Could not remove the Codex MCP server: {result.stderr.strip()}")
+        raise SetupError(f"Could not remove the {client} MCP server: {result.stderr.strip()}")
     return True
 
 
+def _install_codex(*, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> str:
+    return _install_cli_client("codex", dry_run=dry_run, runner=runner)
+
+
 def detected_clients() -> list[str]:
-    binaries = {"codex": "codex", "opencode": "opencode", "zed": "zed"}
-    return [client for client, binary in binaries.items() if shutil.which(binary)]
+    binaries = {"claude-code": "claude", "codex": "codex", "cursor": "cursor", "opencode": "opencode", "zed": "zed"}
+    found = [client for client, binary in binaries.items() if shutil.which(binary)]
+    if "cursor" not in found and _cursor_config_path().parent.is_dir():
+        found.append("cursor")
+    if _claude_desktop_config_path().parent.is_dir():
+        found.append("claude-desktop")
+    return [client for client in CLIENTS if client in found]
 
 
 def _choose_client(requested: str | None, input_fn: Callable[[str], str] = input) -> str:
@@ -215,7 +278,7 @@ def _choose_client(requested: str | None, input_fn: Callable[[str], str] = input
     if len(available) == 1:
         return available[0]
     if not available:
-        raise SetupError("No supported client was found. Re-run with --client codex, opencode, or zed.")
+        raise SetupError("No supported client was found. Re-run with --client and one of: " + ", ".join(CLIENTS) + ".")
     options = ", ".join(f"{index + 1}) {client}" for index, client in enumerate(available))
     answer = input_fn(f"Choose a client ({options}): ").strip()
     if answer.isdigit() and 1 <= int(answer) <= len(available):
@@ -246,17 +309,15 @@ def _validate_connection(base_url: str, workspace: str, api_key: str) -> None:
 
 def command_setup(arguments: argparse.Namespace) -> int:
     client = _choose_client(arguments.client)
-    destination = (
-        "your Codex MCP configuration" if client == "codex" else str(_opencode_config_path(arguments.config_file) if client == "opencode" else _zed_settings_path(arguments.config_file))
-    )
+    destination = f"your {client} MCP configuration" if client in CLI_CLIENTS else str(_json_config_path(client, arguments.config_file))
     if not _confirm(f"Configure Plane Workflow for {client} and update {destination}?", yes=arguments.yes):
         print("Setup cancelled; no settings were changed.")
         return 0
     if arguments.dry_run:
-        if client == "codex":
-            preview = _install_codex(dry_run=True)
+        if client in CLI_CLIENTS:
+            preview = _install_cli_client(client, dry_run=True)
         else:
-            path = _opencode_config_path(arguments.config_file) if client == "opencode" else _zed_settings_path(arguments.config_file)
+            path = _json_config_path(client, arguments.config_file)
             _install_json_client(client, path, dry_run=True)
             preview = f"would update {path} with plane-workflow -> plane-workflow mcp"
         print(f"Setup preview for {client}: {preview}. No credentials or client settings were changed.")
@@ -268,10 +329,10 @@ def command_setup(arguments: argparse.Namespace) -> int:
         raise SetupError("Plane API key is required.")
     _validate_connection(base_url, workspace, api_key)
     profile_path = configuration.save_stored_plane_settings(base_url=base_url, workspace=workspace, api_key=api_key, profile=arguments.profile)
-    if client == "codex":
-        configured = _install_codex(dry_run=arguments.dry_run)
+    if client in CLI_CLIENTS:
+        configured = _install_cli_client(client, dry_run=arguments.dry_run)
     else:
-        configured = _install_json_client(client, _opencode_config_path(arguments.config_file) if client == "opencode" else _zed_settings_path(arguments.config_file), dry_run=arguments.dry_run)
+        configured = _install_json_client(client, _json_config_path(client, arguments.config_file), dry_run=arguments.dry_run)
     print(f"Plane Workflow is configured for {client}. Settings: {profile_path}. Client: {configured}.")
     print("Next: run plane-workflow project list, then plane-workflow project activate PROJECT_ID.")
     print(f"Restart {client}, then ask:")
@@ -420,11 +481,10 @@ def command_remove(arguments: argparse.Namespace) -> int:
     if not _confirm(f"Remove Plane Workflow from {client} and delete profile {arguments.profile!r}?", yes=arguments.yes):
         print("Removal cancelled; no settings were changed.")
         return 0
-    if client == "codex":
-        removed_client = _remove_codex(dry_run=arguments.dry_run)
+    if client in CLI_CLIENTS:
+        removed_client = _remove_cli_client(client, dry_run=arguments.dry_run)
     else:
-        path = _opencode_config_path(arguments.config_file) if client == "opencode" else _zed_settings_path(arguments.config_file)
-        removed_client = _remove_json_client(client, path, dry_run=arguments.dry_run)
+        removed_client = _remove_json_client(client, _json_config_path(client, arguments.config_file), dry_run=arguments.dry_run)
     removed_profile = configuration.remove_stored_plane_settings(arguments.profile) if not arguments.dry_run else True
     print(f"Removed client entry: {removed_client}. Removed profile: {removed_profile}.")
     return 0
@@ -438,7 +498,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--profile", default="default")
     setup.add_argument("--base-url")
     setup.add_argument("--workspace")
-    setup.add_argument("--config-file", help="override the OpenCode or Zed settings path")
+    setup.add_argument("--config-file", help="override the Claude Desktop, Cursor, OpenCode, or Zed settings path")
     setup.add_argument("--non-interactive", action="store_true", help="read the API key from PLANE_API_KEY")
     setup.add_argument("--dry-run", action="store_true")
     setup.add_argument("--yes", action="store_true", help="skip the client-change confirmation")
