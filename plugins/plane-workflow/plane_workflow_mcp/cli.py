@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib.metadata
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +20,9 @@ from . import configuration, server
 CLIENTS = ("claude-code", "codex", "claude-desktop", "cursor", "opencode", "zed")
 JSON_CLIENTS = ("claude-desktop", "cursor", "opencode", "zed")
 CLI_CLIENTS = {"claude-code": "claude", "codex": "codex"}
+PACKAGE_NAME = "plane-workflow-mcp"
+LATEST_RELEASE_URL = "https://api.github.com/repos/amirhosseinkz/plane-workflow-mcp/releases/latest"
+UPDATE_COMMAND = "uv tool install --force {wheel_url}"
 
 
 class SetupError(RuntimeError):
@@ -340,16 +345,58 @@ def command_setup(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def installed_version() -> str | None:
+    try:
+        return importlib.metadata.version(PACKAGE_NAME)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", value.split("+")[0])[:3])
+
+
+def check_for_update(current: str | None, get: Callable[..., Any] | None = None) -> dict[str, Any] | None:
+    """Best-effort lookup of the latest GitHub release; never fails the caller."""
+    if not current or os.getenv("PLANE_WORKFLOW_NO_UPDATE_CHECK"):
+        return None
+    get = get or server.requests.get
+    try:
+        response = get(LATEST_RELEASE_URL, timeout=3, headers={"Accept": "application/vnd.github+json"})
+        release = response.json() if response.ok else None
+    except (server.requests.RequestException, ValueError):
+        return None
+    tag = release.get("tag_name") if isinstance(release, dict) else None
+    if not isinstance(tag, str) or _version_key(tag) <= _version_key(current):
+        return None
+    wheel = next(
+        (
+            asset.get("browser_download_url")
+            for asset in release.get("assets", [])
+            if isinstance(asset, dict) and str(asset.get("name", "")).endswith(".whl")
+        ),
+        None,
+    )
+    return {
+        "latest_version": tag.lstrip("v"),
+        "release_url": release.get("html_url"),
+        "update_command": UPDATE_COMMAND.format(wheel_url=wheel) if wheel else None,
+    }
+
+
 def command_status(arguments: argparse.Namespace) -> int:
     try:
         settings = configuration.load_stored_plane_settings(arguments.profile)
     except configuration.ConfigurationError as error:
         print(json.dumps({"status": "needs_setup", "configured": False, "next_command": "plane-workflow setup", "reason": str(error)}, indent=2))
         return 1
+    version = installed_version()
     print(
         json.dumps(
             {
                 "status": "configured" if settings else "needs_setup",
+                "version": version,
+                "update_available": check_for_update(version),
                 "configured": settings is not None,
                 "profile": settings.profile if settings else None,
                 "base_url": settings.base_url if settings else None,
@@ -491,6 +538,7 @@ def command_remove(arguments: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="plane-workflow", description="Plane Workflow MCP setup and launcher")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {installed_version() or 'unknown'}")
     subcommands = parser.add_subparsers(dest="command")
     setup = subcommands.add_parser("setup", help="configure a client and securely store Plane credentials")
     setup.add_argument("--client", choices=CLIENTS)

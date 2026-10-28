@@ -44,6 +44,12 @@ plane-workflow project list
 plane-workflow project activate PROJECT_ID
 ```
 
+### Update
+
+`plane-workflow status` shows your version and, when a newer release exists, the
+exact command to install it. Run that command, then restart your client. Your
+setup, API key, and selected project are kept, so there is no need to run setup again.
+
 ## First prompt
 
 ```text
