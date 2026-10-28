@@ -313,12 +313,17 @@ def _validate_connection(base_url: str, workspace: str, api_key: str) -> None:
 
 def command_setup(arguments: argparse.Namespace) -> int:
     client = _choose_client(arguments.client)
-    destination = f"your {client} MCP configuration" if client in CLI_CLIENTS else str(_json_config_path(client, arguments.config_file))
+    if client == "none":
+        destination = "your OS keyring only (no client is registered)"
+    else:
+        destination = f"your {client} MCP configuration" if client in CLI_CLIENTS else str(_json_config_path(client, arguments.config_file))
     if not _confirm(f"Configure Plane Workflow for {client} and update {destination}?", yes=arguments.yes):
         print("Setup cancelled; no settings were changed.")
         return 0
     if arguments.dry_run:
-        if client in CLI_CLIENTS:
+        if client == "none":
+            preview = "would store Plane credentials without registering a client"
+        elif client in CLI_CLIENTS:
             preview = _install_cli_client(client, dry_run=True)
         else:
             path = _json_config_path(client, arguments.config_file)
@@ -333,6 +338,10 @@ def command_setup(arguments: argparse.Namespace) -> int:
         raise SetupError("Plane API key is required.")
     _validate_connection(base_url, workspace, api_key)
     profile_path = configuration.save_stored_plane_settings(base_url=base_url, workspace=workspace, api_key=api_key, profile=arguments.profile)
+    if client == "none":
+        print(f"Plane credentials are stored. Settings: {profile_path}. No client was registered.")
+        print("Next: run plane-workflow project list, then plane-workflow project activate PROJECT_ID.")
+        return 0
     if client in CLI_CLIENTS:
         configured = _install_cli_client(client, dry_run=arguments.dry_run)
     else:
@@ -541,7 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {installed_version() or 'unknown'}")
     subcommands = parser.add_subparsers(dest="command")
     setup = subcommands.add_parser("setup", help="configure a client and securely store Plane credentials")
-    setup.add_argument("--client", choices=CLIENTS)
+    setup.add_argument("--client", choices=(*CLIENTS, "none"), help="client to register; none stores credentials only (for the Claude Code plugin)")
     setup.add_argument("--profile", default="default")
     setup.add_argument("--base-url")
     setup.add_argument("--workspace")

@@ -92,6 +92,28 @@ and reject a conflicting `project_id`. They also confirm that a referenced work
 item belongs to the selected project, preventing accidental changes in the
 wrong project.
 
+## Install the Claude Code plugin
+
+The plugin registers the MCP server and adds the Plane Workflow skill, which tells
+Claude how to use the tools safely. It needs [uv](https://docs.astral.sh/uv/).
+First store your Plane credentials once, without registering a client:
+
+```bash
+uvx --from https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.6.0/plane_workflow_mcp-0.6.0-py3-none-any.whl plane-workflow setup --client none
+```
+
+Then, in Claude Code:
+
+```text
+/plugin marketplace add amirhosseinkz/plane-workflow-mcp
+/plugin install plane-workflow@plane-workflow-community
+```
+
+Restart Claude Code and select a project with `activate_plane_project`, or ask
+Claude to list your projects first. If you already registered the server with
+`plane-workflow setup --client claude-code`, remove that entry with
+`claude mcp remove --scope user plane-workflow` so the server is not listed twice.
+
 ## Install the Codex plugin
 
 The repository includes a Codex plugin marketplace entry:

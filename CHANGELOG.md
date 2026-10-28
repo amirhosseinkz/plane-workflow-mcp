@@ -17,6 +17,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 - README animation rendered from an offline walkthrough of the real create flow
   (`scripts/demo_walkthrough.py`, `scripts/render_demo_gif.py`).
+- Claude Code plugin marketplace (`/plugin marketplace add amirhosseinkz/plane-workflow-mcp`)
+  with the MCP server and the Plane Workflow skill, and `setup --client none` to
+  store credentials without registering a client.
 - Guided setup for Claude Code (`--client claude-code`, user scope), Cursor, and
   Claude Desktop. Clients launched from a desktop app get the absolute launcher path.
 - `idempotency_key` on `create_standard_work_item`. Creates carry a stable

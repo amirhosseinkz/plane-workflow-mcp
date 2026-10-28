@@ -42,6 +42,9 @@ stores the key in your OS keyring, and registers the server with your client. Ot
 clients: `--client codex`, `cursor`, `claude-desktop`, `opencode`, or `zed`; any other
 stdio client can run `plane-workflow mcp`. Add `--dry-run` to see the change first.
 
+Using Claude Code? You can [install it as a plugin](docs/installation.md#install-the-claude-code-plugin)
+instead, which also adds a skill for using the tools safely.
+
 Select a project, then restart your client:
 
 ```bash
