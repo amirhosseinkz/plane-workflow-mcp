@@ -7,10 +7,10 @@ read-only project briefings or DOCX/PDF reports.
 ## Install and get your first result
 
 Requires Python 3.11+, uv, and a Plane workspace with an API key.
-Install the published GitHub release without cloning:
+Install from PyPI:
 
 ```bash
-uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.6.0/plane_workflow_mcp-0.6.0-py3-none-any.whl
+uv tool install plane-workflow-mcp
 plane-workflow setup --client claude-code
 plane-workflow project list
 plane-workflow project activate PROJECT_ID
@@ -24,9 +24,8 @@ Replace `PROJECT_ID` with a listed ID. Setup also has `--client codex`, `cursor`
 > work. Include identifiers and totals, flag truncated lists, and do not change
 > Plane data.
 
-The release command installs v0.6.0. To use an unreleased checkout, run
-`uv tool install ./plugins/plane-workflow` from the repository root instead.
-No PyPI release is advertised yet.
+To use an unreleased checkout, run `uv tool install ./plugins/plane-workflow`
+from the repository root instead.
 
 ## Workflow behavior
 

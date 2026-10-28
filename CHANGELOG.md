@@ -5,6 +5,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Install and update from PyPI: `uv tool install plane-workflow-mcp`. The update
+  hint in `plane-workflow status` now uses the PyPI command.
+- Dependency updates; fastmcp stays below 4.
+
 ## [0.6.0] - 2026-10-28
 
 ### Added

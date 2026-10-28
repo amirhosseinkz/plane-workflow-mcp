@@ -33,7 +33,7 @@ change first and record what was actually done and how it was verified.
 Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), and a Plane API key.
 
 ```bash
-uv tool install https://github.com/amirhosseinkz/plane-workflow-mcp/releases/download/v0.6.0/plane_workflow_mcp-0.6.0-py3-none-any.whl
+uv tool install plane-workflow-mcp
 plane-workflow setup --client claude-code
 ```
 
@@ -54,8 +54,8 @@ plane-workflow project activate PROJECT_ID
 
 ### Update
 
-`plane-workflow status` shows your version and, when a newer release exists, the
-exact command to install it. Run that command, then restart your client. Your
+`plane-workflow status` shows your version and tells you when a newer release
+exists. Update with `uv tool install --force plane-workflow-mcp`, then restart your client. Your
 setup, API key, and selected project are kept, so there is no need to run setup again.
 
 ## First prompt
