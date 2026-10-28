@@ -1,21 +1,28 @@
 # Plane Workflow MCP
 
-**Your coding agent does the work. This makes Plane show it, without manual updates.**
+**Your git history already knows what you did. Let your agent put it in Plane.**
 
 An open-source [MCP](https://modelcontextprotocol.io/) server for [Plane](https://plane.so/),
-including self-hosted Plane. Claude Code, Codex, Cursor, and other agents can plan,
-start, and complete Plane work items under your team's rules. They preview every
-change first and record what was actually done and how it was verified.
+including self-hosted Plane. It turns weeks of commits into planned, started, and
+completed Plane work items, dated on your business days, with completion notes
+that cite the commits. Day to day, Claude Code, Codex, Cursor, and other agents use
+it to plan, start, and complete work under your team's rules, previewing every change first.
 
 [![CI](https://github.com/amirhosseinkz/plane-workflow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/amirhosseinkz/plane-workflow-mcp/actions/workflows/ci.yml)
 
-![Offline demo: a bug report becomes a previewed task, and a timed-out create is retried without a duplicate](docs/demo.gif)
+![Offline demo: git history becomes a previewed backfill plan, then completed Plane items that cite their commits](docs/demo-backfill.gif)
 
 <sub>Offline demo: the real server code runs against a test fixture with synthetic data.
 [Reproduce it](docs/demo.md).</sub>
 
 ## What it does
 
+- **Backfill Plane from git.** `plan_git_backfill` reads `git log` and groups commits
+  into work items by module, scope, or folder. Dates come from the commits and are
+  moved onto your business days. Nothing is written until you approve the plan.
+  `apply_git_backfill` then creates, starts, and completes each item, with a comment
+  listing its commits. Re-running it never duplicates items. Also available as
+  `plane-workflow backfill --since 2026-09-01`.
 - **Plan → start → complete, with evidence.** New work gets scope, acceptance
   criteria, assignee, estimate, and start/target dates that skip your non-business
   days. Completion requires a started item, a factual summary, and real
@@ -59,6 +66,14 @@ exists. Update with `uv tool install --force plane-workflow-mcp`, then restart y
 setup, API key, and selected project are kept, so there is no need to run setup again.
 
 ## First prompt
+
+```text
+Read this repository's git history since September 1 and propose Plane work items
+for it with plan_git_backfill. Show me the plan as a table. Do not write anything
+to Plane until I approve.
+```
+
+Or start read-only:
 
 ```text
 Use Plane Workflow to confirm my active workspace and project, then show overdue

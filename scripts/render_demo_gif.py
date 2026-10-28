@@ -2,6 +2,7 @@
 """Render the offline walkthrough as an animated terminal GIF.
 
 uv run --locked --project plugins/plane-workflow --with pillow python scripts/render_demo_gif.py docs/demo.gif
+uv run --locked --project plugins/plane-workflow --with pillow python scripts/render_demo_gif.py docs/demo-backfill.gif --walkthrough backfill
 """
 
 from __future__ import annotations
@@ -13,7 +14,10 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from demo_walkthrough import walkthrough  # noqa: E402
+import demo_backfill_walkthrough  # noqa: E402
+import demo_walkthrough  # noqa: E402
+
+WALKTHROUGHS = {"create": demo_walkthrough.walkthrough, "backfill": demo_backfill_walkthrough.walkthrough}
 
 FONT_CANDIDATES = ["/System/Library/Fonts/Menlo.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]
 SCALE = 2
@@ -61,8 +65,8 @@ def _frame(lines: list[tuple[str, str]], height: int, font: ImageFont.FreeTypeFo
     return image.resize((WIDTH // SCALE, height // SCALE), Image.LANCZOS)
 
 
-def render(output: Path) -> None:
-    script = walkthrough()
+def render(output: Path, walkthrough: str = "create") -> None:
+    script = WALKTHROUGHS[walkthrough]()
     font = _font()
     height = BAR + PAD * 2 + LINE_HEIGHT * len(script)
     frames: list[Image.Image] = []
@@ -92,7 +96,9 @@ def render(output: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
-    render(parser.parse_args().output)
+    parser.add_argument("--walkthrough", choices=sorted(WALKTHROUGHS), default="create")
+    arguments = parser.parse_args()
+    render(arguments.output, arguments.walkthrough)
 
 
 if __name__ == "__main__":

@@ -1,19 +1,33 @@
 {
   "name": "plane-workflow",
   "displayName": "Plane Workflow",
-  "version": "0.6.1",
-  "description": "Plan, start, and complete Plane work items under your team's rules, with previews, idempotent writes, project briefings, and completion records.",
+  "version": "0.7.0",
+  "description": "Backfill Plane from git history, and plan, start, and complete Plane work items under your team's rules, with previews, idempotent writes, and completion records.",
   "author": {
     "name": "Plane Workflow Contributors"
   },
   "homepage": "https://github.com/amirhosseinkz/plane-workflow-mcp",
   "repository": "https://github.com/amirhosseinkz/plane-workflow-mcp",
   "license": "MIT",
-  "keywords": ["plane", "plane-so", "project-management", "mcp", "self-hosted"],
+  "keywords": [
+    "plane",
+    "plane-so",
+    "project-management",
+    "mcp",
+    "self-hosted"
+  ],
   "mcpServers": {
     "plane-workflow": {
       "command": "uv",
-      "args": ["run", "--frozen", "--quiet", "--project", "${CLAUDE_PLUGIN_ROOT}", "plane-workflow", "mcp"]
+      "args": [
+        "run",
+        "--frozen",
+        "--quiet",
+        "--project",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "plane-workflow",
+        "mcp"
+      ]
     }
   }
 }

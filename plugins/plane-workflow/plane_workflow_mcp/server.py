@@ -27,6 +27,7 @@ import requests
 from fastmcp import FastMCP
 from pydantic import Field
 
+from . import backfill
 from .configuration import (
     ConfigurationError,
     StoredPlaneProject,
@@ -794,7 +795,9 @@ def _forget_work_items(api: PlaneApi, project_id: str) -> None:
 
 
 def _creation_external_id(project_id: str, title: str, idempotency_key: str | None) -> str:
-    digest = hashlib.sha256(f"{project_id}\n{_normalize(title)}\n{_text(idempotency_key)}".encode("utf-8")).hexdigest()
+    # An explicit key identifies the item on its own, so renaming the title before a retry is safe.
+    identity = _text(idempotency_key) or _normalize(title)
+    digest = hashlib.sha256(f"{project_id}\n{identity}".encode("utf-8")).hexdigest()
     return f"create-{digest[:32]}"
 
 
@@ -2804,9 +2807,9 @@ def create_standard_work_item(
 ) -> dict[str, Any]:
     """Create a structured Plane work item with labels, duplicate review, optional module/cycle assignment, and planning fields.
 
-    Retrying a create with the same title (and idempotency_key, when one was given) returns the
-    item the first attempt made instead of creating a second one. Set idempotency_key to create
-    intentionally separate items with the same title together with allow_duplicate=true.
+    Retrying a create with the same idempotency_key (or, without one, the same title) returns the
+    item the first attempt made instead of creating a second one. Use distinct idempotency_keys with
+    allow_duplicate=true to create intentionally separate items that share a title.
     """
     if not _text(outcome):
         raise PlaneWorkflowError("outcome is required.")
@@ -3526,6 +3529,187 @@ def export_work_items_report(
         )
     except ReportError as error:
         raise PlaneWorkflowError(str(error)) from error
+
+
+def _backfill_weekdays_and_timezone(api: PlaneApi, project_id: str) -> tuple[set[int], str | None]:
+    profile, _ = _resolve_profile(api, project_id)
+    planning = _planning_policy(profile)
+    return _business_weekdays(planning), planning.get("timezone")
+
+
+@mcp.tool()
+def plan_git_backfill(
+    repo_path: str,
+    since: str,
+    until: str | None = None,
+    author: str | None = None,
+    include_uncommitted: bool = False,
+    module_map: dict[str, str] | None = None,
+    max_gap_days: NonNegativeInt = 3,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Read local git history and propose Plane work items for it, without changing Plane.
+
+    Commits are grouped by module_map path prefix (for example {"apps/web/": "Web"}), then by
+    conventional-commit scope, then by top-level folder, and split when work pauses longer than
+    max_gap_days. Start and target dates come from the commit dates, moved onto the project's business
+    days. Review the items with the user, then call apply_git_backfill with the returned plan_id.
+    """
+    try:
+        repo = backfill.repository_root(repo_path)
+        commits = backfill.read_commits(repo, since=since, until=until, author=author)
+        wip_files = backfill.uncommitted_files(repo) if include_uncommitted else []
+    except backfill.BackfillError as error:
+        raise PlaneWorkflowError(str(error)) from error
+    api = PlaneApi(_find_plane_settings())
+    project_id = _project_id(api, project_id)
+    _, project = _resolve_profile(api, project_id)
+    weekdays, timezone_name = _backfill_weekdays_and_timezone(api, project_id)
+    items = backfill.propose_items(commits, weekdays=weekdays, timezone_name=timezone_name, module_map=module_map, max_gap_days=max_gap_days)
+    if wip_files:
+        head = commits[-1].hash if commits else "none"
+        wip = backfill.uncommitted_item(wip_files, today=_today(timezone_name), weekdays=weekdays, key_suffix=f"{repo.name}:{head}")
+        wip["id"] = str(len(items) + 1)
+        items.append(wip)
+    existing = _cached_work_items(api, project_id)
+    by_external_id = {item.get("external_id"): item for item in existing if item.get("external_id")}
+    for item in items:
+        match = by_external_id.get(_creation_external_id(project_id, item["title"], item["idempotency_key"]))
+        item["in_plane"] = _work_item_summary(match) if match else None
+        item["similar_existing"] = [] if match else _duplicate_candidates(existing, item["title"], min_score=0.85)[:3]
+    now = _utc_now()
+    plan = {
+        "version": 1,
+        "kind": "git_backfill",
+        "id": str(uuid4()),
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=24)).isoformat(),
+        "workspace": api.workspace,
+        "project": {"id": project.get("id") or project_id, "identifier": project.get("identifier"), "name": project.get("name")},
+        "repository": str(repo),
+        "range": {"since": since, "until": until, "author": author},
+        "items": items,
+    }
+    _write_plan(plan)
+    return {
+        "status": "planned",
+        "plan_id": plan["id"],
+        "project": plan["project"],
+        "commits_read": len(commits),
+        "items": [
+            {key: item[key] for key in ("id", "title", "module", "work_item_type", "complexity", "start_date", "target_date", "committed", "files_changed", "in_plane", "similar_existing")}
+            | {"commits": len(item["commits"])}
+            for item in items
+        ],
+        "note": (
+            "Nothing was written to Plane. Show these items to the user. Re-plan with module_map or max_gap_days "
+            "to regroup, then call apply_git_backfill with titles/modules/skip overrides and dry_run=true first."
+        ),
+    }
+
+
+def _backfill_items(plan: dict[str, Any], titles: dict[str, str] | None, modules: dict[str, str] | None, skip: list[str] | None) -> list[dict[str, Any]]:
+    known = {item["id"] for item in plan["items"]}
+    unknown = sorted({*(titles or {}), *(modules or {}), *(skip or [])} - known)
+    if unknown:
+        raise PlaneWorkflowError(f"Unknown backfill item ids: {', '.join(unknown)}.")
+    selected = []
+    for item in plan["items"]:
+        if item["id"] in (skip or []):
+            continue
+        selected.append(item | {"title": _text((titles or {}).get(item["id"])) or item["title"], "module": _text((modules or {}).get(item["id"])) or item["module"]})
+    return selected
+
+
+@mcp.tool()
+def apply_git_backfill(
+    plan_id: str,
+    titles: dict[str, str] | None = None,
+    modules: dict[str, str] | None = None,
+    skip: list[str] | None = None,
+    allow_create_modules: bool = False,
+    confirm_project_identifier: ConfirmProjectIdentifier = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Preview or apply a saved git backfill plan: create, start, and complete each item with a commit-citing record.
+
+    titles and modules override proposed values by item id; skip leaves items out. Committed work is
+    completed with a comment listing its commits; uncommitted work is only started. Every step is
+    idempotent, so re-running after an error resumes without duplicates. Plane sets completed_at to
+    the time of this call; the real dates are kept in start_date, target_date, and the comment.
+    """
+    plan = _read_plan(plan_id)
+    if plan.get("kind") != "git_backfill":
+        raise PlaneWorkflowError("That plan_id is not a git backfill plan.")
+    if _plan_expired(plan):
+        return {"status": "expired", "plan_id": plan_id, "note": "Create a fresh plan with plan_git_backfill."}
+    items = _backfill_items(plan, titles, modules, skip)
+    project_id = plan["project"]["id"]
+    if dry_run:
+        return {
+            "status": "preview",
+            "plan_id": plan_id,
+            "project": plan["project"],
+            "items": [
+                {
+                    "id": item["id"],
+                    "title": item["title"],
+                    "module": item["module"],
+                    "dates": f"{item['start_date']} → {item['target_date']}",
+                    "actions": ["create", "start", "complete"] if item["committed"] else ["create", "start"],
+                    "acceptance_criteria": backfill.acceptance_criteria(item),
+                }
+                for item in items
+            ],
+            "note": "No Plane data was changed. Call again with dry_run=false after the user approves these items.",
+        }
+    api = PlaneApi(_find_plane_settings())
+    states = api.states(project_id)
+    results: list[dict[str, Any]] = []
+    for item in items:
+        common = {"project_id": project_id, "confirm_project_identifier": confirm_project_identifier}
+        try:
+            external_id = _creation_external_id(project_id, item["title"], item["idempotency_key"])
+            found = next((entry for entry in _cached_work_items(api, project_id) if entry.get("external_id") == external_id), None)
+            created = {"status": "already_created", "work_item": _work_item_summary(found)} if found else create_standard_work_item(
+                outcome=item["title"],
+                acceptance_criteria=backfill.acceptance_criteria(item),
+                work_item_type=item["work_item_type"],
+                module_name=item["module"],
+                allow_create_module=allow_create_modules,
+                scope=f"Reconstructed from git: {len(item['commits'])} commits touching {item['files_changed']} files"
+                if item["committed"]
+                else f"Uncommitted changes in {item['files_changed']} files",
+                complexity=item["complexity"],
+                start_date=item["start_date"],
+                target_date=item["target_date"],
+                idempotency_key=item["idempotency_key"],
+                allow_duplicate=True,
+                **common,
+            )
+            work_item_id = created["work_item"]["id"]
+            if created["status"] == "already_created":
+                current = _state_type(states, _item_state_id(api.work_item(project_id, work_item_id)))
+                if current in {"completed", "cancelled"}:
+                    results.append({"id": item["id"], "title": item["title"], "status": f"already_{current}", "work_item": created["work_item"]})
+                    continue
+            start_standard_work_item(work_item_id=work_item_id, start_date=item["start_date"], **common)
+            outcome = "started"
+            if item["committed"]:
+                completed = complete_standard_work_item(work_item_id=work_item_id, **backfill.completion_record(item), **common)
+                outcome = completed["status"]
+                if outcome == "completion_pending":
+                    raise PlaneWorkflowError(f"Completion is pending at stage {completed.get('stage')}: {completed.get('reason')}")
+        except PlaneWorkflowError as error:
+            results.append({"id": item["id"], "title": item["title"], "status": "failed", "reason": str(error)})
+            return {
+                "status": "partial",
+                "plan_id": plan_id,
+                "results": results,
+                "note": "Stopped at the first failure. Fix the cause and call apply_git_backfill again with the same arguments; finished items are not duplicated.",
+            }
+        results.append({"id": item["id"], "title": item["title"], "status": outcome, "created": created["status"], "work_item": created["work_item"]})
+    return {"status": "applied", "plan_id": plan_id, "project": plan["project"], "results": results}
 
 
 def _self_test() -> None:

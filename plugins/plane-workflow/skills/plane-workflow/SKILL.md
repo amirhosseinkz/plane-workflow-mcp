@@ -39,6 +39,15 @@ Use the `plane-workflow` MCP tools as the primary path for Plane work. The tools
 6. Call `update_standard_work_item` for ordinary changes to a specific item. It preserves labels and descriptions and rejects direct transitions to completed or cancelled states.
 7. Never invent a release association; the diagnostic reports whether Plane supports it.
 
+## Backfill From Git
+
+1. When the user wants past work recorded, call `plan_git_backfill` with the repository path and a `since` date. Ask for a `module_map` if module names matter.
+2. Show the proposed items as a table: id, dates, module, title, commits. Point out items already in Plane and similar existing titles.
+3. Apply the user's edits through `titles`, `modules`, and `skip`. Re-plan with `module_map` or `max_gap_days` to regroup commits.
+4. Call `apply_git_backfill` with `dry_run=true` and show the preview. Only after explicit approval, call it with `dry_run=false`. Pass `allow_create_modules=true` only if the user agreed to create the missing modules.
+5. On `partial`, report the failure, fix the cause, and run the same call again. It resumes without duplicating items.
+6. Never claim tests ran for backfilled work. The completion record states that the evidence is the commits.
+
 ## Complete Work
 
 1. Use `complete_standard_work_item` for every transition to Done. Do not use the generic update tool.

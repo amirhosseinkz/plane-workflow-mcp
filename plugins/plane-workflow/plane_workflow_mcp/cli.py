@@ -538,6 +538,52 @@ def command_remove(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _print_backfill_plan(plan: dict[str, Any]) -> None:
+    project = plan["project"]
+    print(f"Backfill plan {plan['plan_id']} for {project.get('identifier') or project.get('id')}: {plan['commits_read']} commits, {len(plan['items'])} items.")
+    for item in plan["items"]:
+        state = "in Plane" if item["in_plane"] else ("done" if item["committed"] else "in progress")
+        print(f"  {item['id']:>3}  {item['start_date']} → {item['target_date']}  [{item['module']}] {item['title']}  ({item['commits']} commits, {item['complexity']}, {state})")
+
+
+def command_backfill(arguments: argparse.Namespace) -> int:
+    module_map = {}
+    for entry in arguments.module or []:
+        prefix, separator, module = entry.partition("=")
+        if not separator or not prefix or not module:
+            raise SetupError("--module takes PATH_PREFIX=Module, for example apps/web/=Web.")
+        module_map[prefix] = module
+    plan = server.plan_git_backfill(
+        repo_path=arguments.repo,
+        since=arguments.since,
+        until=arguments.until,
+        author=arguments.author,
+        include_uncommitted=arguments.include_uncommitted,
+        module_map=module_map or None,
+        max_gap_days=arguments.max_gap_days,
+        project_id=arguments.project_id,
+    )
+    _print_backfill_plan(plan)
+    if not arguments.apply:
+        print("Nothing was written to Plane. Re-run with --apply to create, start, and complete these items.")
+        return 0
+    if not _confirm(f"Create these {len(plan['items'])} items in Plane?", yes=arguments.yes):
+        print("Backfill cancelled; Plane was not changed.")
+        return 0
+    result = server.apply_git_backfill(
+        plan_id=plan["plan_id"],
+        allow_create_modules=arguments.create_modules,
+        confirm_project_identifier=arguments.confirm_project_identifier,
+        dry_run=False,
+    )
+    for entry in result["results"]:
+        print(f"  {entry['id']:>3}  {entry['status']}: {entry['title']}" + (f" ({entry['reason']})" if entry.get("reason") else ""))
+    if result["status"] != "applied":
+        print(result["note"])
+        return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="plane-workflow", description="Plane Workflow MCP setup and launcher")
     parser.add_argument("--version", action="version", version=f"%(prog)s {installed_version() or 'unknown'}")
@@ -574,6 +620,20 @@ def build_parser() -> argparse.ArgumentParser:
     remove.add_argument("--dry-run", action="store_true")
     remove.add_argument("--yes", action="store_true")
     remove.set_defaults(handler=command_remove)
+    backfill_parser = subcommands.add_parser("backfill", help="propose (and optionally create) Plane work items from git history")
+    backfill_parser.add_argument("--repo", default=".", help="git repository path (default: current directory)")
+    backfill_parser.add_argument("--since", required=True, help="first date to read, for example 2026-09-01")
+    backfill_parser.add_argument("--until")
+    backfill_parser.add_argument("--author", help="only commits whose author matches this pattern")
+    backfill_parser.add_argument("--include-uncommitted", action="store_true", help="add one started item for uncommitted changes")
+    backfill_parser.add_argument("--module", action="append", metavar="PREFIX=MODULE", help="map a path prefix to a Plane module; repeatable")
+    backfill_parser.add_argument("--max-gap-days", type=int, default=3)
+    backfill_parser.add_argument("--project-id")
+    backfill_parser.add_argument("--confirm-project-identifier", help="needed when --project-id is not the active project")
+    backfill_parser.add_argument("--create-modules", action="store_true", help="create missing modules")
+    backfill_parser.add_argument("--apply", action="store_true", help="write the items to Plane after confirmation")
+    backfill_parser.add_argument("--yes", action="store_true")
+    backfill_parser.set_defaults(handler=command_backfill)
     subcommands.add_parser("mcp", help="start the stdio MCP server").set_defaults(handler=lambda _: server.mcp.run() or 0)
     return parser
 
