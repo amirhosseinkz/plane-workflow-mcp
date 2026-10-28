@@ -5,6 +5,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-28
+
+### Added
+
+- Official MCP Registry metadata (`server.json`, name
+  `io.github.amirhosseinkz/plane-workflow-mcp`). The publish workflow registers each
+  release after uploading it to PyPI.
+- `glama.json` listing the maintainer for the Glama directory.
+
 ### Changed
 
 - Install and update from PyPI: `uv tool install plane-workflow-mcp`. The update

@@ -69,10 +69,12 @@ compatibility with a GUI client. CI runs this check on every build.
 Since v0.6.0 the package is on PyPI as `plane-workflow-mcp`, and each GitHub
 release also carries the wheel and source archive.
 
-To release: update the version and lockfiles, run all checks, merge, then publish a
+To release: update the version in `pyproject.toml`, both plugin manifests, and
+`server.json` (the publish workflow fails if `server.json` differs), update the lockfiles, run all checks, merge, then publish a
 GitHub release with the built artifacts. Use a new version for code changes; never
 replace a published artifact. After the publish workflow finishes, verify a fresh
-install with `uvx --from plane-workflow-mcp plane-workflow --version`.
+install with `uvx --from plane-workflow-mcp plane-workflow --version`. The same
+workflow then publishes `server.json` to the official MCP Registry with GitHub OIDC.
 
 The `Publish to PyPI` workflow (`.github/workflows/publish.yml`) builds, smoke-tests,
 and uploads the artifacts with PyPI trusted publishing when a GitHub release is

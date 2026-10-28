@@ -1,5 +1,7 @@
 # Plane Workflow MCP
 
+<!-- mcp-name: io.github.amirhosseinkz/plane-workflow-mcp -->
+
 Keep Plane tasks in sync with your coding agent using configurable team workflows.
 Draft structured tasks, preview changes, record completion evidence, and get
 read-only project briefings or DOCX/PDF reports.
