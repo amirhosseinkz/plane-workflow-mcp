@@ -1,7 +1,8 @@
 # Roadmap: from 5 to 100 GitHub stars
 
-Status: **draft for maintainer review.** Nothing in this plan has been posted,
-published, or pushed. Dates are targets, not commitments.
+Status: **in progress.** v0.6.0 to v0.7.0 shipped (PyPI, MCP Registry, Glama), and
+the first community post went out on 2026-10-28. Dates are targets, not commitments.
+See "What we learned so far" below for results.
 
 ## Where we are (baseline, 2026-10-28)
 
@@ -170,6 +171,53 @@ that own the audience, then broad launches once the hero exists.
 Rules: one post per community, read its self-promotion rules first, disclose
 authorship, no vote rings. Each post needs maintainer approval before sending.
 
+## What we learned so far (2026-10-29)
+
+| Signal | 2026-10-28 | 2026-10-29 |
+| --- | --- | --- |
+| Stars / forks | 5 / 0 | 5 / 0 |
+| Views, last 14 days (uniques) | 1 (1) | 53 (28), 52 of them on 2026-10-28 |
+| Referrers | none | only `github.com`; Reddit is not attributed (mobile apps strip the referrer) |
+| Glama | not listed | listed and claimed; license A, maintenance A; quality not graded because no tools were detected |
+| awesome-mcp-servers PR | — | open, automated checks green, waiting for a maintainer |
+
+**r/selfhosted.** The standalone post brought 27 visitors in a few hours, then was
+removed under rule 6 (new projects belong in the weekly "New Project Megathread").
+The megathread comment brought almost nothing. Reasons:
+
+1. We did not read the rules closely enough. A removed post is lost reach, and a
+   repost is not allowed.
+2. The comment went into a thread that was already six days old. Megathreads are
+   sorted by new and get most of their readers in the first day or two.
+3. Most r/selfhosted readers do not run Plane, so even a visible post reaches few
+   people who can use it. 27 visitors and 0 stars is a small sample, but it
+   suggests the audience was not right, not that the README is the problem.
+
+**Changes to the plan:**
+
+- Check each community's self-promotion rules and flair *before* drafting, and
+  record them next to the draft.
+- Put Plane users first: Plane GitHub Discussions (Show and tell; low traffic, but
+  permanent and searchable) and Plane Discord, before any general community.
+- Use r/selfhosted again only on the day a new megathread opens.
+- Fix the Glama gap: give Glama a way to build and run the server (a Dockerfile)
+  so it detects the tools and grades quality. Servers without detected tools rank
+  lower in Glama search.
+- Show HN goes ahead (target Tue 2026-11-03 or Wed 2026-11-04, 8–10am US Eastern),
+  with the dev.to write-up published the day before so the HN thread can link to it.
+- Measure the day after each post; a referrer appearing in GitHub traffic is the
+  evidence that a channel worked.
+
+| Next | Channel | Status |
+| --- | --- | --- |
+| 1 | Plane GitHub Discussions, Show and tell | next |
+| 2 | Plane Discord | after 1 |
+| 3 | Glama Dockerfile (tool detection) | proposed |
+| 4 | dev.to write-up | day before Show HN |
+| 5 | Show HN | 2026-11-03 or 2026-11-04 |
+| 6 | r/mcp, r/ClaudeAI | after checking rules |
+| 7 | r/selfhosted megathread | the day a new one opens |
+
 ## Milestones
 
 Measured with GitHub traffic (views/uniques/referrers, 14-day window), stars,
@@ -188,9 +236,7 @@ If M1 misses its view target, the problem is listings/messaging; if views come b
 stars do not (conversion < 3%), the problem is the README and first run — fix those
 before posting anywhere else.
 
-## Next concrete step (pending approval)
+## Next concrete step
 
-Phase 1 on a new branch: Claude Code setup adapter, 429 backoff, honest error
-mapping, cheap duplicate check, idempotent create, clear strict-estimate error,
-safe project override, and a PyPI-ready package — each with tests in
-`plugins/plane-workflow/tests/`, no calls to any live Plane instance.
+Post to Plane GitHub Discussions (Show and tell) with the draft in the launch notes,
+then measure referrers the next day.
