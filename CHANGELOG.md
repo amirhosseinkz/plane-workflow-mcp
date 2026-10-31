@@ -5,6 +5,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A Dockerfile that runs the stdio MCP server, so MCP directories such as Glama can
+  build it and list its tools.
+
 ## [0.7.0] - 2026-10-28
 
 ### Added
