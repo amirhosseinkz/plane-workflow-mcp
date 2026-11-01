@@ -2,38 +2,26 @@
 
 **Your git history already knows what you did. Let your agent put it in Plane.**
 
-An open-source [MCP](https://modelcontextprotocol.io/) server for [Plane](https://plane.so/),
-including self-hosted Plane. It turns weeks of commits into planned, started, and
-completed Plane work items, dated on your business days, with completion notes
-that cite the commits. Day to day, Claude Code, Codex, Cursor, and other agents use
-it to plan, start, and complete work under your team's rules, previewing every change first.
-
+[![PyPI](https://img.shields.io/pypi/v/plane-workflow-mcp)](https://pypi.org/project/plane-workflow-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/plane-workflow-mcp)](https://pypi.org/project/plane-workflow-mcp/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/amirhosseinkz/plane-workflow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/amirhosseinkz/plane-workflow-mcp/actions/workflows/ci.yml)
+
+An open-source [MCP](https://modelcontextprotocol.io/) server and CLI for
+[Plane](https://plane.so/), cloud or self-hosted. It reads your commits and turns
+them into Plane work items that are planned, started, and completed on the right
+business days, with notes that cite the commits. You see the whole plan first;
+nothing is written until you approve it.
 
 ![Offline demo: git history becomes a previewed backfill plan, then completed Plane items that cite their commits](docs/demo-backfill.gif)
 
 <sub>Offline demo: the real server code runs against a test fixture with synthetic data.
 [Reproduce it](docs/demo.md).</sub>
 
-## What it does
-
-- **Backfill Plane from git.** `plan_git_backfill` reads `git log` and groups commits
-  into work items by module, scope, or folder. Dates come from the commits and are
-  moved onto your business days. Nothing is written until you approve the plan.
-  `apply_git_backfill` then creates, starts, and completes each item, with a comment
-  listing its commits. Re-running it never duplicates items. Also available as
-  `plane-workflow backfill --since 2026-09-01`.
-- **Plan → start → complete, with evidence.** New work gets scope, acceptance
-  criteria, assignee, estimate, and start/target dates that skip your non-business
-  days. Completion requires a started item, a factual summary, and real
-  verification. It never fabricates either.
-- **Preview first, safe to retry.** Write tools support `dry_run` previews. Creates
-  check for duplicates and are idempotent, so a timeout followed by a retry does not
-  create a second item. Rate limits are retried with backoff.
-- **Know what needs attention.** Read-only briefings list overdue, stale, unassigned,
-  unestimated, and unscheduled work. Reports export to DOCX or PDF.
-- **Never touch the wrong project.** Writes are tied to the selected workspace and
-  project, unless one call explicitly confirms another project's identifier.
+**Who it is for:** teams on Plane who work through Claude Code, Codex, Cursor, or
+another MCP client, and whose board falls behind what they actually shipped. It
+works next to the [official Plane MCP server](https://github.com/makeplane/plane-mcp-server)
+rather than replacing it ([how they differ](#how-it-compares)).
 
 ## Quick start
 
@@ -59,11 +47,38 @@ plane-workflow project list
 plane-workflow project activate PROJECT_ID
 ```
 
+Then preview a backfill from any of your repositories. Nothing is written to Plane
+without `--apply`:
+
+```bash
+plane-workflow backfill --since 2026-09-01
+```
+
 ### Update
 
 `plane-workflow status` shows your version and tells you when a newer release
 exists. Update with `uv tool install --force plane-workflow-mcp`, then restart your client. Your
 setup, API key, and selected project are kept, so there is no need to run setup again.
+
+## What it does
+
+- **Backfill Plane from git.** `plan_git_backfill` reads `git log` and groups commits
+  into work items by module, scope, or folder. Dates come from the commits and are
+  moved onto your business days. Nothing is written until you approve the plan.
+  `apply_git_backfill` then creates, starts, and completes each item, with a comment
+  listing its commits. Re-running it never duplicates items. Also available as
+  `plane-workflow backfill --since 2026-09-01`.
+- **Plan → start → complete, with evidence.** New work gets scope, acceptance
+  criteria, assignee, estimate, and start/target dates that skip your non-business
+  days. Completion requires a started item, a factual summary, and real
+  verification. It never fabricates either.
+- **Preview first, safe to retry.** Write tools support `dry_run` previews. Creates
+  check for duplicates and are idempotent, so a timeout followed by a retry does not
+  create a second item. Rate limits are retried with backoff.
+- **Know what needs attention.** Read-only briefings list overdue, stale, unassigned,
+  unestimated, and unscheduled work. Reports export to DOCX or PDF.
+- **Never touch the wrong project.** Writes are tied to the selected workspace and
+  project, unless one call explicitly confirms another project's identifier.
 
 ## First prompt
 
@@ -110,7 +125,9 @@ calls a tool; there is no background sync.
 - [Planning rules, lifecycle, batch work, and reports](docs/workflows.md)
 - [Workflow examples](docs/examples.md) · [Offline demo](docs/demo.md)
 - [Optional Mattermost bot](plugins/plane-workflow/mattermost-bot/README.md)
-- [Roadmap](docs/roadmap-100-stars.md) · [Changelog](CHANGELOG.md)
+- [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
 
 MIT licensed. Community project, not affiliated with Plane.
+
+If it saves your team a round of status updates, a star helps other Plane users find it.

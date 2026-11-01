@@ -36,6 +36,7 @@ ALLOWED_HOSTS = {
     "modelcontextprotocol.io",
     "static.modelcontextprotocol.io",
     "glama.ai",
+    "img.shields.io",
     "token.actions.githubusercontent.com",
     "opencode.ai",
     "plane.so",
